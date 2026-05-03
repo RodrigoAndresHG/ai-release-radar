@@ -86,7 +86,7 @@ python daily_brief.py
 
 `RADAR_MODE=brief` sends a short Top 3 ranking of releases with provider, title, score, link, and a recommendation.
 
-`RADAR_MODE=content` sends a publish-ready content pack: TikTok/Reel script, caption, 3 alternate hooks, comment question, final line, and link.
+`RADAR_MODE=content` sends a publish-ready content pack: TikTok/Reel script, caption, 3 alternate hooks, comment question, final line, link, and an Instagram image generated at `output/instagram_release.png`.
 
 The brief run selects the Top 3 releases of the day and writes the #1 item to `selected_release.json`. The content run reuses that same #1 item, so the publish-ready version stays aligned with the top insight.
 
@@ -123,6 +123,8 @@ OPENAI_API_KEY=
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=
 RADAR_MODE=brief
+GOOGLE_DRIVE_FOLDER_ID=
+GOOGLE_SERVICE_ACCOUNT_JSON=
 ```
 
 Then run:

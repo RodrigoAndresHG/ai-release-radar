@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import base64
 import urllib.parse
 from urllib.parse import urlparse
 from datetime import datetime
@@ -21,6 +22,8 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 RADAR_MODE = os.getenv("RADAR_MODE", "brief").strip().lower()
 SELECT_CHOICE = os.getenv("SELECT_CHOICE", "").strip()
+GOOGLE_DRIVE_FOLDER_ID = os.getenv("GOOGLE_DRIVE_FOLDER_ID", "").strip()
+GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
 
 if not OPENAI_API_KEY:
     raise ValueError("Falta OPENAI_API_KEY en .env")
@@ -95,6 +98,7 @@ KEYWORDS = [
 
 HISTORY_FILE = f"history_{RADAR_MODE}.json"
 SELECTED_RELEASE_FILE = "selected_release.json"
+INSTAGRAM_IMAGE_PATH = os.path.join("output", "instagram_release.png")
 RECENT_HOURS = 72  # solo tendencias recientes (3 dias)
 MIN_RELEASE_SCORE = 45
 
@@ -1016,6 +1020,92 @@ def generate_signal(best):
     )
     return response.output_text.strip()
 
+def build_image_prompt(release, content_text):
+    title = release.get("human_title") or build_human_title(release)
+    provider_product = provider_product_label(release)
+
+    return f"""
+Create a square 1080x1080 Instagram image.
+Style: premium tech editorial, clean dark background, modern composition, high contrast, subtle depth, no clutter.
+Brand text: "Rodri HeredIA".
+Main headline in Spanish, large and legible:
+"{title}"
+Small label:
+"{provider_product}"
+
+Use a sophisticated AI/product release visual language: abstract interface layers, soft light, refined typography, elegant grid, premium newsroom feel.
+Do not use fake logos, screenshots, charts, tables, tiny text, or dense paragraphs.
+The image must feel ready for an Instagram post about this release.
+
+Context for tone only:
+{content_text[:1200]}
+""".strip()
+
+
+def generate_instagram_image(prompt):
+    output_dir = "output"
+    output_path = INSTAGRAM_IMAGE_PATH
+    os.makedirs(output_dir, exist_ok=True)
+
+    result = client.images.generate(
+        model="gpt-image-1",
+        prompt=prompt,
+        size="1024x1024",
+        quality="medium",
+    )
+
+    image_data = result.data[0]
+    if getattr(image_data, "b64_json", None):
+        raw_image = base64.b64decode(image_data.b64_json)
+    elif getattr(image_data, "url", None):
+        response = requests.get(image_data.url, timeout=60)
+        response.raise_for_status()
+        raw_image = response.content
+    else:
+        raise ValueError("La respuesta de OpenAI Images no incluyó b64_json ni url")
+
+    temp_path = os.path.join(output_dir, "instagram_release_raw.png")
+    with open(temp_path, "wb") as f:
+        f.write(raw_image)
+
+    from PIL import Image
+
+    with Image.open(temp_path) as image:
+        image = image.convert("RGB").resize((1080, 1080), Image.LANCZOS)
+        image.save(output_path, "PNG")
+
+    try:
+        os.remove(temp_path)
+    except OSError:
+        pass
+
+    return output_path
+
+
+def upload_to_google_drive(file_path):
+    # TODO: Implementar subida cuando estén definidas las credenciales y el flujo OAuth/Service Account.
+    # Esperado: usar GOOGLE_DRIVE_FOLDER_ID y GOOGLE_SERVICE_ACCOUNT_JSON para subir file_path
+    # y devolver una URL compartible.
+    if not GOOGLE_DRIVE_FOLDER_ID or not GOOGLE_SERVICE_ACCOUNT_JSON:
+        return None
+    return None
+
+
+def generate_content_image_status(release, content_text):
+    try:
+        image_prompt = build_image_prompt(release, content_text)
+        image_path = generate_instagram_image(image_prompt)
+        drive_url = upload_to_google_drive(image_path)
+        if drive_url:
+            return f"\n\nIMAGEN INSTAGRAM:\n{drive_url}"
+        return (
+            "\n\nIMAGEN INSTAGRAM:\n"
+            f"Generada localmente en {image_path}. Google Drive aun no esta configurado."
+        )
+    except Exception as exc:
+        return f"\n\nIMAGEN INSTAGRAM:\nNo se pudo generar la imagen esta vez. Error: {exc}"
+
+
 # -----------------------------
 # Enviar a Telegram (1 mensaje idealmente)
 # -----------------------------
@@ -1034,17 +1124,53 @@ def send_to_telegram(text: str):
         response.raise_for_status()
 
 
+def send_telegram_photo(file_path, caption=None):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
+    with open(file_path, "rb") as image_file:
+        response = requests.post(
+            url,
+            data={
+                "chat_id": CHAT_ID,
+                "caption": caption or "",
+            },
+            files={"photo": image_file},
+            timeout=60,
+        )
+    response.raise_for_status()
+
+
 # -----------------------------
 # Ejecución principal
 # -----------------------------
 if __name__ == "__main__":
+    image_ready = False
+
     if RADAR_MODE == "brief":
         top_releases, new_seen = get_brief_releases()
         msg = build_brief_top3(top_releases)
     else:
         best, new_seen = get_top_release()
         msg = generate_signal(best)
+        if best:
+            try:
+                os.remove(INSTAGRAM_IMAGE_PATH)
+            except OSError:
+                pass
+            msg += generate_content_image_status(best, msg)
+            image_ready = os.path.exists(INSTAGRAM_IMAGE_PATH)
 
     send_to_telegram(msg)
+    if RADAR_MODE == "content" and image_ready:
+        try:
+            send_telegram_photo(
+                INSTAGRAM_IMAGE_PATH,
+                caption="Imagen lista para Instagram - Rodri HeredIA",
+            )
+        except Exception as exc:
+            try:
+                send_to_telegram(f"No se pudo enviar la imagen por Telegram. Error: {exc}")
+            except Exception:
+                print(f"No se pudo enviar la imagen por Telegram. Error: {exc}")
+
     save_history(new_seen)
     print("✅ AI Release Radar enviado a Telegram.")

@@ -71,7 +71,7 @@ Do not commit a real `.env` file or real secret values.
 ## Run Manually In GitHub Actions
 
 1. Go to the `Actions` tab in GitHub.
-2. Select `AI Release Radar`.
+2. Select `AI Release Radar Brief` or `AI Release Radar Content`.
 3. Click `Run workflow`.
 4. Choose the branch.
 5. Click `Run workflow`.
@@ -82,13 +82,26 @@ The workflow installs Python dependencies and runs:
 python daily_brief.py
 ```
 
+## Radar Modes
+
+`RADAR_MODE=brief` sends a short release summary: headline, what changed, why it matters, real example, and link.
+
+`RADAR_MODE=content` sends a publish-ready content pack: TikTok/Reel script, caption, 3 alternate hooks, comment question, final line, and link.
+
 ## Daily Schedule
 
-The workflow is configured to run daily at 12:00 UTC:
+The brief workflow runs daily at 12:00 UTC:
 
 ```yaml
 schedule:
   - cron: "0 12 * * *"
+```
+
+The content workflow runs daily at 12:10 UTC:
+
+```yaml
+schedule:
+  - cron: "10 12 * * *"
 ```
 
 GitHub scheduled workflows run automatically on the default branch after the workflow file is merged or pushed there. You can disable or re-enable the workflow from the GitHub Actions UI.
@@ -107,6 +120,7 @@ Create a local `.env` file using `.env.example` as a guide:
 OPENAI_API_KEY=
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=
+RADAR_MODE=brief
 ```
 
 Then run:

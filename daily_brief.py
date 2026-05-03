@@ -18,6 +18,7 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+RADAR_MODE = os.getenv("RADAR_MODE", "brief").strip().lower()
 
 if not OPENAI_API_KEY:
     raise ValueError("Falta OPENAI_API_KEY en .env")
@@ -25,6 +26,8 @@ if not TELEGRAM_TOKEN:
     raise ValueError("Falta TELEGRAM_BOT_TOKEN en .env")
 if not CHAT_ID:
     raise ValueError("Falta TELEGRAM_CHAT_ID en .env")
+if RADAR_MODE not in {"brief", "content"}:
+    raise ValueError("RADAR_MODE debe ser 'brief' o 'content'")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -86,7 +89,7 @@ KEYWORDS = [
     "DeepMind new model",
 ]
 
-HISTORY_FILE = "history.json"
+HISTORY_FILE = f"history_{RADAR_MODE}.json"
 RECENT_HOURS = 72  # solo tendencias recientes (3 dias)
 MIN_RELEASE_SCORE = 45
 
@@ -422,7 +425,7 @@ def pick_best_article(articles):
     return best
 
 
-def build_prompt(today: str, best):
+def build_prompt(today: str, best, mode: str):
     # best es 1 solo release detectado por scoring deterministico
     title = (best.get("title") or "").replace("\n", " ").strip()
     summary = (best.get("summary") or "").replace("\n", " ").strip()
@@ -442,12 +445,12 @@ def build_prompt(today: str, best):
         f"LINK: {link}\n"
     )
 
-    prompt = f"""
+    base_rules = f"""
 Actua como un creador de contenido que explica lanzamientos reales de IA de forma simple y lista para grabar.
 Tu audiencia: rectores, gerentes, emprendedores, creators y builders no necesariamente tecnicos.
 
 Objetivo:
-Convertir UN lanzamiento real o cambio concreto en un resumen corto, claro y util para video.
+Convertir UN lanzamiento real o cambio concreto en una pieza clara, util y con criterio.
 
 Reglas:
 - Maximo 300 palabras total.
@@ -467,6 +470,43 @@ Reglas:
 
 Contexto del item elegido:
 {context}
+"""
+
+    if mode == "content":
+        prompt = f"""
+{base_rules}
+
+Salida obligatoria. Usa exactamente este formato:
+AI RELEASE RADAR (Rodri)
+FECHA: {today}
+
+GUION TIKTOK/REEL 60s:
+Hook: maximo 12 palabras, conversacional, basado en problema real o beneficio.
+Explicacion: dilo como si se lo contaras a una persona ocupada.
+Impacto: explica que cambia en la vida/trabajo de alguien, sin jerga.
+Accion: una cosa simple que probarias hoy.
+Cierre: no uses CTA generico; refuerza autoridad con tono de experiencia real.
+
+CAPTION:
+Texto corto para publicar. Humano, claro, con autoridad tranquila.
+
+3 HOOKS ALTERNATIVOS:
+1.
+2.
+3.
+
+PREGUNTA PARA COMENTARIOS:
+Una pregunta concreta, no generica.
+
+FRASE FINAL:
+Debe reforzar autoridad o valor practico. Ejemplos de tono: "Si trabajas con IA en serio, esto si importa" o "Este tipo de cambios separan el toy del sistema real".
+
+LINK:
+URL verificable.
+"""
+    else:
+        prompt = f"""
+{base_rules}
 
 Salida obligatoria. Usa exactamente este formato:
 AI RELEASE RADAR (Rodri)
@@ -494,14 +534,6 @@ EJEMPLO REAL:
 Universidad: 1 ejemplo claro.
 Fintech/Cooperativa: 1 ejemplo claro.
 
-GUION 60s:
-Hook: maximo 12 palabras, conversacional, basado en problema real o beneficio.
-Explicacion: dilo como si se lo contaras a una persona ocupada.
-Impacto: explica que cambia en la vida/trabajo de alguien, sin jerga.
-Accion: una cosa simple que probarias hoy.
-Cierre: no uses CTA generico; refuerza autoridad con tono de experiencia real.
-Ejemplos de tono: "Si trabajas con IA en serio, esto si importa" o "Este tipo de cambios separan el toy del sistema real".
-
 LINK:
 URL verificable.
 """
@@ -518,7 +550,7 @@ def generate_signal(best):
             "No hay lanzamientos relevantes nuevos hoy.\n"
         )
 
-    prompt = build_prompt(today, best)
+    prompt = build_prompt(today, best, RADAR_MODE)
 
     response = client.responses.create(
         model="gpt-5-mini",

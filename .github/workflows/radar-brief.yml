@@ -1,4 +1,4 @@
-name: AI Release Radar
+name: AI Release Radar Brief
 
 on:
   workflow_dispatch:
@@ -6,13 +6,14 @@ on:
     - cron: "0 12 * * *"
 
 jobs:
-  run-radar:
+  run-radar-brief:
     runs-on: ubuntu-latest
 
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      RADAR_MODE: brief
 
     steps:
       - name: Check out repository
@@ -26,5 +27,5 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run radar
+      - name: Run radar brief
         run: python daily_brief.py

@@ -472,7 +472,8 @@ FECHA: {today}
 
 TITULAR:
 1 frase clara y simple, como algo que alguien diria en voz alta.
-Enfocate en el beneficio o cambio practico, no en el numero de version ni en tono de changelog.
+Enfocate en beneficio directo, no en el numero de version ni en tono de changelog.
+Evita palabras como "integracion", "configuracion" y "flujo".
 
 QUE CAMBIO:
 Maximo 3 lineas:
@@ -482,18 +483,20 @@ Maximo 3 lineas:
 
 POR QUE IMPORTA EN SIMPLE:
 Maximo 3 lineas, explicado para un rector, gerente o emprendedor.
+Debe iniciar con: "Esto significa algo simple:"
 Debe entenderse en 5 segundos. Evita terminos tecnicos si hay una palabra mas simple.
+Traduce todo a impacto practico.
 
 EJEMPLO REAL:
 Universidad: 1 ejemplo claro.
 Fintech/Cooperativa: 1 ejemplo claro.
 
 GUION 60s:
-Hook: empieza con un problema real o un beneficio claro.
+Hook: maximo 12 palabras, conversacional, basado en problema real o beneficio.
 Explicacion: dilo como si se lo contaras a una persona ocupada.
 Impacto: explica que cambia en la vida/trabajo de alguien, sin jerga.
 Accion: una cosa simple que probarias hoy.
-Cierre: natural, directo y facil de decir en video.
+Cierre: no uses CTA generico; refuerza autoridad o valor practico.
 
 LINK:
 URL verificable.

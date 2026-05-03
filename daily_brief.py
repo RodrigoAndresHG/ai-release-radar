@@ -2,6 +2,7 @@ import os
 import json
 import re
 import base64
+import math
 import urllib.parse
 from urllib.parse import urlparse
 from datetime import datetime
@@ -99,6 +100,7 @@ KEYWORDS = [
 HISTORY_FILE = f"history_{RADAR_MODE}.json"
 SELECTED_RELEASE_FILE = "selected_release.json"
 INSTAGRAM_IMAGE_PATH = os.path.join("output", "instagram_release.png")
+BACKGROUND_IMAGE_PATH = os.path.join("output", "background.png")
 RECENT_HOURS = 72  # solo tendencias recientes (3 dias)
 MIN_RELEASE_SCORE = 45
 
@@ -1097,7 +1099,7 @@ def image_template_instruction(template):
         ),
         "BEFORE_AFTER": (
             "Use the BEFORE_AFTER template only: two clean columns labeled exactly "
-            "ANTES and DESPUES, with before_text -> after_text as the central comparison."
+            "ANTES and DESPUÉS, with before_text -> after_text as the central comparison."
         ),
         "ARCHITECTURE": (
             "Use the ARCHITECTURE template only: a vertical Top -> Middle -> Bottom "
@@ -1156,7 +1158,7 @@ def build_diagram_texts(release, template):
 
         return {
             "before_label": "ANTES",
-            "after_label": "DESPUES",
+            "after_label": "DESPUÉS",
             "before_text": safe_image_text(before, fallback="Antes"),
             "after_text": safe_image_text(after, fallback="Despues"),
         }
@@ -1177,136 +1179,383 @@ def build_diagram_texts(release, template):
 
 
 def build_image_prompt(release, content_text):
-    title = compact_image_title(release)
     template = image_template(release)
-    template_instruction = image_template_instruction(template)
-    provider = canonical_provider_name(provider_name(release))
-    product = image_product_name(release)
-    diagram_texts = build_diagram_texts(release, template)
-    safe_summary = safe_image_text(release.get("summary", ""), max_chars=90, fallback="Release confirmado")
 
     return f"""
-Create a 1080x1080 Instagram image with a fixed premium visual identity for "Rodrigo Hered IA".
-Make it look like a real system explanation created by a CTO, not a generic AI poster.
+Create a 1080x1080 square background image only.
+This image will be used behind text added later with Python/Pillow.
 
-TEXT CONTROL - CRITICAL:
-- ALL TEXT MUST BE EXACTLY AS PROVIDED.
-- Do not invent text.
-- Do not add extra labels.
-- Do not use placeholders.
-- Do not misspell provider names.
-- Use exact brand: "Rodrigo Hered IA".
-- If text is needed in the diagram, use only TITLE, TEMPLATE, DIAGRAM_TEXTS, PROVIDER, PRODUCT, and BRAND below.
+Visual direction:
+- Dark premium tech background.
+- Black or very dark gray base.
+- Subtle grid.
+- Abstract system architecture inspired by the {template} template.
+- Soft glowing connector lines.
+- Clean depth.
+- Minimal UI feeling.
+- Premium CTO/CIO-level educational visual style.
+- Leave visual breathing room in the top 20% and bottom 20%.
 
-ALLOWED TEXT ONLY:
-TITLE: "{title}"
-TEMPLATE: "{template}"
-PROVIDER: "{provider}"
-PRODUCT: "{product}"
-DIAGRAM_TEXTS: {json.dumps(diagram_texts, ensure_ascii=False)}
-BRAND: "Rodrigo Hered IA"
-
-STEP 1 - SELECTED TEMPLATE:
-- Use exactly one visual template: {template}.
-- Template meaning:
-  FLOW = how something works.
-  BEFORE_AFTER = change or comparison.
-  ARCHITECTURE = system view.
-
-STEP 2 - STRICT 1080x1080 LAYOUT:
-TOP 20%:
-- Strong title, clean and bold.
-- Use only this exact title, max 60 characters:
-"{title}"
-
-CENTER 60%:
-- Diagram based on the selected template.
-- {template_instruction}
-- The diagram must communicate what changed, why it matters, and how it works as a system or process.
-- Max 3-5 diagram elements.
-- Use only the provided DIAGRAM_TEXTS for labels.
-- Do not render placeholder text like [X], [Y], TODO, or TBD.
-
-BOTTOM 20%:
-- Use this exact bottom text:
-"Rodrigo Hered IA"
-- DO NOT MODIFY THIS TEXT.
-- Keep it subtle, clean, consistent, and premium.
-
-STEP 3 - VISUAL STYLE:
-- Dark background.
-- Minimal UI.
-- Clean spacing.
-- Subtle glow lines.
-- Grid alignment feel.
-- High contrast typography.
-- Mobile readable.
-- Max 3-5 elements.
-
-STEP 4 - FORBIDDEN:
+Strict prohibitions:
+- No text.
+- No letters.
+- No words.
+- No numbers.
+- No logos.
+- No icons.
+- No brand marks.
+- No UI labels.
+- No screenshots.
 - No robots.
 - No brains.
 - No generic AI glowing art.
 - No stock images.
 - No fantasy visuals.
 - No clutter.
-- No long paragraphs.
-- No excessive text.
-- No tiny unreadable labels.
 
-STEP 5 - SYSTEM FEEL:
-- Make it look like a real system explanation created by a CTO, not a generic AI poster.
-
-STEP 6 - CONSISTENCY:
-- All images must look like the same brand.
-- Same spacing.
-- Same hierarchy.
-- Same visual logic.
-- Professional, CIO-level, educational, high authority.
-
-Context for tone only:
-Release summary: {safe_summary}
+The result must be a clean abstract background/diagram base with absolutely no readable text.
 """.strip()
 
 
-def generate_instagram_image(prompt):
-    output_dir = "output"
-    output_path = INSTAGRAM_IMAGE_PATH
-    os.makedirs(output_dir, exist_ok=True)
+def load_font(size, bold=False):
+    from PIL import ImageFont
 
-    result = client.images.generate(
-        model="gpt-image-1",
-        prompt=prompt,
-        size="1024x1024",
-        quality="medium",
+    font_paths = (
+        [
+            "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        ]
+        if bold
+        else [
+            "/System/Library/Fonts/Supplemental/Arial.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        ]
     )
 
-    image_data = result.data[0]
-    if getattr(image_data, "b64_json", None):
-        raw_image = base64.b64decode(image_data.b64_json)
-    elif getattr(image_data, "url", None):
-        response = requests.get(image_data.url, timeout=60)
-        response.raise_for_status()
-        raw_image = response.content
-    else:
-        raise ValueError("La respuesta de OpenAI Images no incluyó b64_json ni url")
+    for font_path in font_paths:
+        if os.path.exists(font_path):
+            try:
+                return ImageFont.truetype(font_path, size=size)
+            except OSError:
+                continue
 
-    temp_path = os.path.join(output_dir, "instagram_release_raw.png")
-    with open(temp_path, "wb") as f:
-        f.write(raw_image)
+    return ImageFont.load_default()
 
-    from PIL import Image
 
-    with Image.open(temp_path) as image:
-        image = image.convert("RGB").resize((1080, 1080), Image.LANCZOS)
-        image.save(output_path, "PNG")
+def _text_width(text, font):
+    from PIL import Image, ImageDraw
+
+    image = Image.new("RGB", (1, 1))
+    draw = ImageDraw.Draw(image)
+    bbox = draw.textbbox((0, 0), text, font=font)
+    return bbox[2] - bbox[0]
+
+
+def wrap_text(text, font, max_width, max_lines):
+    words = safe_image_text(text, max_chars=120).split()
+    lines = []
+    current = ""
+
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        if _text_width(candidate, font) <= max_width:
+            current = candidate
+            continue
+
+        if current:
+            lines.append(current)
+        current = word
+        if len(lines) == max_lines:
+            break
+
+    if current and len(lines) < max_lines:
+        lines.append(current)
+
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+
+    if lines and _text_width(lines[-1], font) > max_width:
+        while lines[-1] and _text_width(lines[-1] + "...", font) > max_width:
+            lines[-1] = lines[-1][:-1].rstrip()
+        lines[-1] = (lines[-1] + "...").strip()
+
+    return lines or ["Cambio importante"]
+
+
+def draw_rounded_rectangle(draw, box, radius, fill, outline=None, width=1):
+    draw.rounded_rectangle(box, radius=radius, fill=fill, outline=outline, width=width)
+
+
+def draw_arrow(draw, start, end, fill=(125, 231, 255, 220), width=5):
+    draw.line([start, end], fill=fill, width=width)
+    angle = math.atan2(end[1] - start[1], end[0] - start[0])
+    arrow_len = 18
+    arrow_angle = math.pi / 7
+    points = [
+        end,
+        (
+            end[0] - arrow_len * math.cos(angle - arrow_angle),
+            end[1] - arrow_len * math.sin(angle - arrow_angle),
+        ),
+        (
+            end[0] - arrow_len * math.cos(angle + arrow_angle),
+            end[1] - arrow_len * math.sin(angle + arrow_angle),
+        ),
+    ]
+    draw.polygon(points, fill=fill)
+
+
+def get_image_visual_data(release):
+    template = image_template(release)
+    return {
+        "title": compact_image_title(release, max_chars=60),
+        "template": template,
+        "provider": canonical_provider_name(provider_name(release)),
+        "product": image_product_name(release),
+        "diagram_texts": build_diagram_texts(release, template),
+        "brand": "Rodrigo Hered IA",
+    }
+
+
+def create_fallback_background(output_path=BACKGROUND_IMAGE_PATH):
+    from PIL import Image, ImageDraw, ImageFilter
+
+    width = height = 1080
+    image = Image.new("RGB", (width, height), "#05070a")
+    pixels = image.load()
+    for y in range(height):
+        for x in range(width):
+            glow = int(28 * (x / width) + 18 * (1 - y / height))
+            pixels[x, y] = (5, 7 + glow // 3, 10 + glow)
+
+    draw = ImageDraw.Draw(image, "RGBA")
+    for pos in range(0, width, 54):
+        draw.line([(pos, 0), (pos, height)], fill=(100, 210, 255, 20), width=1)
+        draw.line([(0, pos), (width, pos)], fill=(100, 210, 255, 16), width=1)
+
+    draw.line([(170, 600), (910, 420)], fill=(80, 220, 255, 70), width=5)
+    draw.line([(250, 335), (780, 720)], fill=(120, 120, 255, 50), width=4)
+    for center, radius, color in [
+        ((250, 335), 120, (80, 220, 255, 45)),
+        ((785, 720), 150, (120, 120, 255, 42)),
+    ]:
+        x, y = center
+        draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=color)
+
+    image = image.filter(ImageFilter.GaussianBlur(radius=0.4))
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    image.save(output_path, "PNG")
+    return output_path
+
+
+def generate_background_image(prompt):
+    output_dir = "output"
+    output_path = BACKGROUND_IMAGE_PATH
+    os.makedirs(output_dir, exist_ok=True)
 
     try:
-        os.remove(temp_path)
-    except OSError:
-        pass
+        result = client.images.generate(
+            model="gpt-image-1",
+            prompt=prompt,
+            size="1024x1024",
+            quality="medium",
+        )
+
+        image_data = result.data[0]
+        if getattr(image_data, "b64_json", None):
+            raw_image = base64.b64decode(image_data.b64_json)
+        elif getattr(image_data, "url", None):
+            response = requests.get(image_data.url, timeout=60)
+            response.raise_for_status()
+            raw_image = response.content
+        else:
+            raise ValueError("La respuesta de OpenAI Images no incluyó b64_json ni url")
+
+        temp_path = os.path.join(output_dir, "background_raw.png")
+        with open(temp_path, "wb") as f:
+            f.write(raw_image)
+
+        from PIL import Image
+
+        with Image.open(temp_path) as image:
+            image = image.convert("RGB").resize((1080, 1080), Image.LANCZOS)
+            image.save(output_path, "PNG")
+
+        try:
+            os.remove(temp_path)
+        except OSError:
+            pass
+
+        return output_path
+    except Exception as exc:
+        print(f"No se pudo generar fondo con OpenAI Images. Usando fallback. Error: {exc}")
+        return create_fallback_background(output_path)
+
+
+def _draw_centered_text(draw, text, center_x, y, font, fill, max_width, max_lines=1, line_gap=8):
+    lines = wrap_text(text, font, max_width, max_lines)
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=font)
+        line_width = bbox[2] - bbox[0]
+        draw.text((center_x - line_width / 2, y), line, font=font, fill=fill)
+        y += (bbox[3] - bbox[1]) + line_gap
+    return y
+
+
+def _draw_card(draw, box, text, font, fill=(255, 255, 255, 245)):
+    draw_rounded_rectangle(
+        draw,
+        box,
+        radius=28,
+        fill=(10, 18, 26, 210),
+        outline=(120, 220, 255, 105),
+        width=2,
+    )
+    x1, y1, x2, y2 = box
+    text_lines = wrap_text(text, font, max_width=(x2 - x1 - 44), max_lines=2)
+    total_height = len(text_lines) * 30 + (len(text_lines) - 1) * 8
+    text_y = y1 + ((y2 - y1) - total_height) / 2 - 2
+    for line in text_lines:
+        bbox = draw.textbbox((0, 0), line, font=font)
+        draw.text((x1 + (x2 - x1 - (bbox[2] - bbox[0])) / 2, text_y), line, font=font, fill=fill)
+        text_y += 38
+
+
+def _compose_flow(draw, data, fonts):
+    texts = data["diagram_texts"]
+    y = 440
+    w = 250
+    h = 132
+    gap = 68
+    x = 72
+    boxes = [
+        (x, y, x + w, y + h),
+        (x + w + gap, y, x + 2 * w + gap, y + h),
+        (x + 2 * (w + gap), y, x + 3 * w + 2 * gap, y + h),
+    ]
+    labels = [texts["node_1"], texts["node_2"], texts["node_3"]]
+    for box, label in zip(boxes, labels):
+        _draw_card(draw, box, label, fonts["diagram"])
+    draw_arrow(draw, (boxes[0][2] + 12, y + h / 2), (boxes[1][0] - 12, y + h / 2))
+    draw_arrow(draw, (boxes[1][2] + 12, y + h / 2), (boxes[2][0] - 12, y + h / 2))
+
+
+def _compose_before_after(draw, data, fonts):
+    texts = data["diagram_texts"]
+    left = (92, 365, 496, 675)
+    right = (584, 365, 988, 675)
+    label_font = fonts["small_bold"]
+
+    for box, label, body in [
+        (left, texts["before_label"], texts["before_text"]),
+        (right, texts["after_label"], texts["after_text"]),
+    ]:
+        draw_rounded_rectangle(
+            draw,
+            box,
+            radius=34,
+            fill=(10, 18, 26, 212),
+            outline=(120, 220, 255, 100),
+            width=2,
+        )
+        x1, y1, x2, _ = box
+        draw.text((x1 + 34, y1 + 34), label, font=label_font, fill=(125, 231, 255, 230))
+        _draw_centered_text(draw, body, (x1 + x2) / 2, y1 + 138, fonts["diagram"], (255, 255, 255, 245), x2 - x1 - 64, 2)
+
+    draw_arrow(draw, (516, 520), (564, 520), fill=(125, 231, 255, 230), width=6)
+
+
+def _compose_architecture(draw, data, fonts):
+    texts = data["diagram_texts"]
+    boxes = [
+        (300, 308, 780, 418, texts["top"]),
+        (250, 478, 830, 598, texts["middle"]),
+        (210, 668, 870, 792, texts["bottom"]),
+    ]
+    for index, (x1, y1, x2, y2, label) in enumerate(boxes):
+        fill = (10, 18, 26, 224) if index == 1 else (10, 18, 26, 205)
+        draw_rounded_rectangle(
+            draw,
+            (x1, y1, x2, y2),
+            radius=30,
+            fill=fill,
+            outline=(120, 220, 255, 110),
+            width=2,
+        )
+        _draw_centered_text(draw, label, (x1 + x2) / 2, y1 + 36, fonts["diagram"], (255, 255, 255, 245), x2 - x1 - 64, 1)
+
+    draw_arrow(draw, (540, 432), (540, 462), fill=(125, 231, 255, 220), width=6)
+    draw_arrow(draw, (540, 612), (540, 652), fill=(125, 231, 255, 220), width=6)
+
+
+def compose_instagram_image(background_path, release, content_text):
+    from PIL import Image, ImageDraw
+
+    output_path = INSTAGRAM_IMAGE_PATH
+    data = get_image_visual_data(release)
+
+    try:
+        background = Image.open(background_path).convert("RGB").resize((1080, 1080), Image.LANCZOS)
+    except Exception:
+        create_fallback_background(background_path)
+        background = Image.open(background_path).convert("RGB").resize((1080, 1080), Image.LANCZOS)
+
+    image = background.convert("RGBA")
+    overlay = Image.new("RGBA", image.size, (0, 0, 0, 118))
+    image = Image.alpha_composite(image, overlay)
+    draw = ImageDraw.Draw(image, "RGBA")
+
+    fonts = {
+        "title": load_font(60, bold=True),
+        "diagram": load_font(30, bold=True),
+        "small_bold": load_font(24, bold=True),
+        "brand": load_font(34, bold=True),
+    }
+
+    margin = 72
+    title_lines = wrap_text(data["title"], fonts["title"], 1080 - 2 * margin, max_lines=2)
+    title_y = 72
+    for line in title_lines:
+        bbox = draw.textbbox((0, 0), line, font=fonts["title"])
+        draw.text((margin, title_y), line, font=fonts["title"], fill=(255, 255, 255, 248))
+        title_y += (bbox[3] - bbox[1]) + 14
+
+    draw_rounded_rectangle(
+        draw,
+        (72, 260, 1008, 832),
+        radius=40,
+        fill=(0, 0, 0, 72),
+        outline=(255, 255, 255, 34),
+        width=1,
+    )
+
+    if data["template"] == "BEFORE_AFTER":
+        _compose_before_after(draw, data, fonts)
+    elif data["template"] == "ARCHITECTURE":
+        _compose_architecture(draw, data, fonts)
+    else:
+        _compose_flow(draw, data, fonts)
+
+    brand = data["brand"]
+    bbox = draw.textbbox((0, 0), brand, font=fonts["brand"])
+    draw.text(
+        ((1080 - (bbox[2] - bbox[0])) / 2, 948),
+        brand,
+        font=fonts["brand"],
+        fill=(255, 255, 255, 230),
+    )
+
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    image.convert("RGB").save(output_path, "PNG")
 
     return output_path
+
+
+def generate_instagram_image(prompt, release=None, content_text=""):
+    background_path = generate_background_image(prompt)
+    if release is None:
+        return background_path
+    return compose_instagram_image(background_path, release, content_text)
 
 
 def upload_to_google_drive(file_path):
@@ -1321,7 +1570,7 @@ def upload_to_google_drive(file_path):
 def generate_content_image_status(release, content_text):
     try:
         image_prompt = build_image_prompt(release, content_text)
-        image_path = generate_instagram_image(image_prompt)
+        image_path = generate_instagram_image(image_prompt, release=release, content_text=content_text)
         drive_url = upload_to_google_drive(image_path)
         if drive_url:
             return f"\n\nIMAGEN INSTAGRAM:\n{drive_url}"

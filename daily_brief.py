@@ -443,71 +443,56 @@ def build_prompt(today: str, best):
     )
 
     prompt = f"""
-Actua como un radar de lanzamientos de productos y modelos de IA.
-Tu audiencia son creators, builders, equipos de tecnologia junior, gerentes y CIOs que necesitan saber que cambio concreto acaba de salir.
+Actua como un creador de contenido que explica lanzamientos reales de IA de forma simple y lista para grabar.
+Tu audiencia: rectores, gerentes, emprendedores, creators y builders no necesariamente tecnicos.
 
 Objetivo:
-Convertir UN lanzamiento real o cambio concreto en un mensaje claro y accionable.
+Convertir UN lanzamiento real o cambio concreto en un resumen corto, claro y util para video.
 
 Reglas:
-- Release-first: explica que producto, modelo, API, SDK, pricing, rollout, deprecation o feature cambio.
+- Maximo 300 palabras total.
+- Lenguaje simple.
+- Cero jerga innecesaria.
+- No sonar como consultor.
+- No sonar como paper.
+- No incluir tablas.
+- No incluir analisis largo.
 - No hagas editorial estrategico ni predicciones.
-- No conviertas opiniones de CEOs en noticia si no hay lanzamiento, disponibilidad, modelo, API, pricing o feature concreta.
-- No uses rumores, "reportedly", predicciones AGI ni articulos de analisis como release.
-- Si falta evidencia oficial, dilo claramente y baja el tono.
+- No conviertas opiniones en noticia si no hay lanzamiento real.
 - No inventes datos, fechas, benchmarks, disponibilidad ni precios.
 
 Contexto del item elegido:
 {context}
 
-Clasifica TIPO_EVENTO usando solo una opcion:
-model_release | product_launch | api_change | pricing_change | availability_change | deprecation | feature_release | sdk_tooling | none
-
-Guia:
-- model_release: nuevo GPT/Claude/Gemini/Gemma/Sora/Veo/Lyria/etc.
-- product_launch: nueva app o producto oficial.
-- api_change: nuevo endpoint, API, capability o cambio de plataforma.
-- pricing_change: cambio de precios, limites o billing.
-- availability_change: GA, preview, beta, region, plan o rollout.
-- deprecation: retiro, reemplazo o fecha de fin.
-- feature_release: agentes, audio, video, coding, multimodalidad, realtime, tools.
-- sdk_tooling: SDK, CLI, changelog developer, Claude Code, librerias.
-
-Salida obligatoria (formato exacto, ordenado, facil de leer):
+Salida obligatoria. Usa exactamente este formato:
 AI RELEASE RADAR (Rodri)
 FECHA: {today}
-PROVEEDOR:
-TIPO_EVENTO:
 
 TITULAR:
-1 frase clara y corta.
+1 frase clara y simple.
 
 QUE CAMBIO:
-2-4 lineas. Di exactamente que se lanzo, cambio o quedo disponible.
+Maximo 3 lineas:
+- que salio
+- que hace
+- por que es diferente
 
-POR_QUE_IMPORTA:
-3 bullets max. Enfocate en decisiones practicas.
+POR QUE IMPORTA EN SIMPLE:
+Maximo 3 lineas, explicado para un rector, gerente o emprendedor.
 
-IMPACTO_PARA_CREATORS_Y_BUILDERS:
-2-4 bullets sobre que pueden construir, probar, migrar o vigilar.
+EJEMPLO REAL:
+Universidad: 1 ejemplo claro.
+Fintech/Cooperativa: 1 ejemplo claro.
 
-CASO_APLICADO:
-Un ejemplo concreto y simple para una universidad, cooperativa, fintech, creator o equipo dev.
-
-GUION 60s (listo para grabar):
-Hook (0-5s): 1 frase que sorprenda sin exagerar.
-Parte 1 (5-20s): que cambio, explicado facil.
-Parte 2 (20-40s): que habilita para creators/builders.
-Parte 3 (40-55s): que probaria hoy.
-Cierre (55-60s): invitacion a comentar.
+GUION 60s:
+Hook:
+Explicacion:
+Impacto:
+Accion:
+Cierre:
 
 LINK:
 URL verificable.
-
-Importante:
-- No inventes datos.
-- No uses lenguaje alarmista ni grandilocuente.
-- Si no puedes confirmar que sea release real, TIPO_EVENTO debe ser none y debes decirlo.
 """
     return prompt.strip()
 
@@ -518,12 +503,8 @@ def generate_signal(best):
     if not best:
         return (
             "AI RELEASE RADAR (Rodri)\n"
-            f"FECHA: {today}\n"
-            "PROVEEDOR: -\n"
-            "TIPO_EVENTO: none\n\n"
-            "TITULAR:\n"
-            "No hay lanzamientos relevantes nuevos hoy.\n\n"
-            "LINK:\n-\n"
+            f"FECHA: {today}\n\n"
+            "No hay lanzamientos relevantes nuevos hoy.\n"
         )
 
     prompt = build_prompt(today, best)

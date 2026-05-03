@@ -1,64 +1,149 @@
-# AI Product & Model Release Radar
+# AI Release Radar
 
-AI Product & Model Release Radar is a small Python agent that monitors AI product and model release signals, selects the strongest relevant item, generates a short creator/builder-friendly brief with OpenAI, and sends it to Telegram.
+AI Release Radar is a release-first agent that monitors official AI product and model signals, ranks the most relevant launches, and sends the daily radar to Telegram.
 
-It is designed to run locally or on GitHub Actions once per day.
+The system is optimized for Rodrigo Hered IA content workflows: first it sends a short Top 3, then it turns the selected release into a publish-ready content pack and an Instagram/TikTok cover image.
 
 ## What It Detects
 
-- New OpenAI, ChatGPT, API, and Sora model or product releases
-- New Anthropic, Claude, and Claude Code releases
-- New Google, Gemini, DeepMind, and Vertex AI releases
-- Official AI apps and product launches
-- API, SDK, changelog, and developer tooling updates
-- Pricing, availability, rollout, beta, preview, GA, and deprecation changes
-- Important features such as agents, audio, video, coding, multimodal support, realtime, function calling, and tools
+- New OpenAI, ChatGPT, API, GPT, and Sora releases.
+- New Anthropic, Claude, and Claude Code releases.
+- New Google, Gemini, DeepMind, and Vertex AI releases.
+- Official AI apps and product launches.
+- API, SDK, changelog, developer tooling, and release note updates.
+- Pricing, availability, rollout, preview, GA, and deprecation changes.
+- Features involving agents, audio, video, coding, multimodality, realtime, function calling, and tools.
 
-The agent uses release-first scoring, so official changelogs and concrete availability changes rank higher than commentary or generic AI news.
+The scoring intentionally penalizes CEO opinions without releases, AGI predictions, rumors, generic analysis, recycled news, and vague future-of-AI posts.
 
-## What It Does Not Do
+## Architecture
 
-- It does not invent details, prices, dates, benchmarks, or availability.
-- It does not scrape websites aggressively.
-- It does not publish automatically to social media.
-- It does not treat CEO opinions, AGI predictions, rumors, or analysis articles as releases unless there is a concrete launch, model, API, pricing, availability, or feature change.
-
-## Sources Monitored
-
-The script currently checks:
-
-- OpenAI News RSS
-- Claude Code changelog RSS
-- Vertex AI Generative AI release notes feed
-- Google Gemini product updates RSS
-- Google DeepMind blog RSS
-- Google News RSS fallback queries focused on release notes, changelogs, new models, Gemini API, Vertex AI, Claude Code, ChatGPT, and OpenAI API
-
-Some official release pages do not expose a stable RSS feed yet, so they are tracked as code TODOs instead of using fragile scraping: OpenAI API changelog, ChatGPT release notes, Anthropic API release notes, Claude release notes, and Gemini API release notes.
-
-## Create A Telegram Bot
-
-1. Open Telegram and start a chat with `@BotFather`.
-2. Send `/newbot`.
-3. Follow the prompts to choose a name and username.
-4. Copy the bot token. This becomes `TELEGRAM_BOT_TOKEN`.
-5. Start a chat with your new bot or add it to a group/channel.
-6. Get the chat ID. A common method is to send a message to the bot, then open:
+High-level flow:
 
 ```text
-https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/getUpdates
+Telegram
+  -> Cloudflare Worker
+  -> GitHub Actions
+  -> daily_brief.py
+  -> OpenAI API
+  -> Telegram
 ```
 
-Use the returned `chat.id` as `TELEGRAM_CHAT_ID`.
+Main components:
 
-## Configure GitHub Secrets
+- `daily_brief.py`: fetches releases, scores them, selects the daily insight, generates content, creates images, and sends Telegram messages.
+- GitHub Actions: runs the scheduled `brief` and `content` modes.
+- Telegram Bot: receives the Top 3, content pack, and final image.
+- Cloudflare Worker: external webhook layer for manual Telegram selection, typically mapping replies `1`, `2`, or `3` to a GitHub Actions `workflow_dispatch` run.
+- OpenAI API: generates the textual content and the text-free visual background.
+- Pillow: composes all final image text, diagrams, avatar, layout, and branding locally.
 
-In your GitHub repository:
+More detail: [docs/architecture.md](docs/architecture.md).
 
-1. Go to `Settings`.
-2. Open `Secrets and variables`.
-3. Open `Actions`.
-4. Add these repository secrets:
+## Daily Flow
+
+The intended daily flow is:
+
+1. `07:00 America/Guayaquil` / `12:00 UTC`: `RADAR_MODE=brief` sends the Top 3 releases to Telegram.
+2. The brief run saves `selected_release.json` with the Top 3 and defaults the selected release to `#1`.
+3. `07:10 America/Guayaquil` / `12:10 UTC`: `RADAR_MODE=content` generates content automatically for `#1`.
+4. Manual override: selecting `1`, `2`, or `3` from Telegram can trigger the content workflow with that choice through the Cloudflare Worker.
+
+The content workflow also supports manual GitHub execution with the `choice` input.
+
+## GitHub Actions
+
+Workflows:
+
+- `.github/workflows/radar-brief.yml`
+  - Runs daily at `12:00 UTC`.
+  - Supports `workflow_dispatch`.
+  - Sets `RADAR_MODE=brief`.
+  - Sends the Top 3 and caches `selected_release.json`.
+
+- `.github/workflows/radar-content.yml`
+  - Runs daily at `12:10 UTC`.
+  - Supports `workflow_dispatch` with optional `choice`.
+  - Sets `RADAR_MODE=content`.
+  - Uses `selected_release.json` so the content aligns with the brief.
+  - Generates the text pack and image, then sends both to Telegram.
+
+## Telegram Bot
+
+Telegram is used for delivery:
+
+- `sendMessage` sends the brief or content text.
+- `sendPhoto` sends `output/instagram_release.png` when content mode generates an image.
+- If image sending fails, the workflow does not crash; the script attempts to send a text warning instead.
+
+To create the bot:
+
+1. Open Telegram and start `@BotFather`.
+2. Send `/newbot`.
+3. Follow the instructions.
+4. Save the token as `TELEGRAM_BOT_TOKEN`.
+5. Get the destination chat id and save it as `TELEGRAM_CHAT_ID`.
+
+## Cloudflare Worker
+
+The Cloudflare Worker is the external bridge for manual Telegram selection.
+
+Expected role:
+
+- Receive Telegram webhook updates.
+- Parse messages like `1`, `2`, or `3`.
+- Trigger GitHub Actions `workflow_dispatch` for `radar-content.yml`.
+- Pass the selected number as the `choice` input.
+
+The Worker code is not required inside this repository for the Python agent to run. Setup details are in [docs/setup.md](docs/setup.md).
+
+## Image Generation For Instagram
+
+The image system is intentionally split into two stages:
+
+1. OpenAI Images generates only a dark premium abstract background with no text, no letters, no logos, and no marks.
+2. Pillow composes the final 1080x1080 image locally:
+   - title
+   - glass-effect diagram container
+   - FLOW / BEFORE_AFTER / ARCHITECTURE templates
+   - local logos if available
+   - circular Rodrigo avatar if available
+   - exact brand text: `Rodrigo Hered IA`
+   - subtitle: `AI Builder / CIO`
+
+This prevents image-model typos in provider names, brand text, diagram labels, and release titles.
+
+Detailed image docs: [docs/image-system.md](docs/image-system.md).
+
+## Assets
+
+Optional local assets:
+
+```text
+assets/brand/rodrigo.png
+assets/logos/openai.png
+assets/logos/anthropic.png
+assets/logos/google.png
+assets/logos/gemini.png
+assets/logos/aws.png
+assets/logos/claude.png
+```
+
+If assets are missing, the system continues without failing.
+
+Generated outputs:
+
+```text
+output/background.png
+output/instagram_release.png
+selected_release.json
+history_brief.json
+history_content.json
+```
+
+## Variables And Secrets
+
+Required for GitHub Actions and local runs:
 
 ```text
 OPENAI_API_KEY
@@ -66,47 +151,32 @@ TELEGRAM_BOT_TOKEN
 TELEGRAM_CHAT_ID
 ```
 
-Do not commit a real `.env` file or real secret values.
+Optional:
 
-## Run Manually In GitHub Actions
-
-1. Go to the `Actions` tab in GitHub.
-2. Select `AI Release Radar Brief` or `AI Release Radar Content`.
-3. Click `Run workflow`.
-4. Choose the branch.
-5. Click `Run workflow`.
-
-The workflow installs Python dependencies and runs:
-
-```bash
-python daily_brief.py
+```text
+GOOGLE_DRIVE_FOLDER_ID
+GOOGLE_SERVICE_ACCOUNT_JSON
 ```
 
-## Radar Modes
+Runtime variables:
 
-`RADAR_MODE=brief` sends a short Top 3 ranking of releases with provider, title, score, link, and a recommendation.
-
-`RADAR_MODE=content` sends a publish-ready content pack: TikTok/Reel script, caption, 3 alternate hooks, comment question, final line, link, and an Instagram image generated at `output/instagram_release.png`.
-
-The brief run selects the Top 3 releases of the day and writes the #1 item to `selected_release.json`. The content run reuses that same #1 item, so the publish-ready version stays aligned with the top insight.
-
-## Daily Schedule
-
-The brief workflow runs daily at 12:00 UTC:
-
-```yaml
-schedule:
-  - cron: "0 12 * * *"
+```text
+RADAR_MODE=brief | content
+SELECT_CHOICE=1 | 2 | 3
+TEST_MODE=1
 ```
 
-The content workflow runs daily at 12:10 UTC:
+Cloudflare Worker secrets usually include:
 
-```yaml
-schedule:
-  - cron: "10 12 * * *"
+```text
+TELEGRAM_BOT_TOKEN
+GITHUB_TOKEN
+GITHUB_OWNER
+GITHUB_REPO
+GITHUB_REF
 ```
 
-GitHub scheduled workflows run automatically on the default branch after the workflow file is merged or pushed there. You can disable or re-enable the workflow from the GitHub Actions UI.
+Do not commit real secret values.
 
 ## Local Setup
 
@@ -116,7 +186,7 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
-Create a local `.env` file using `.env.example` as a guide:
+Create `.env` from `.env.example`:
 
 ```text
 OPENAI_API_KEY=
@@ -127,8 +197,22 @@ GOOGLE_DRIVE_FOLDER_ID=
 GOOGLE_SERVICE_ACCOUNT_JSON=
 ```
 
-Then run:
+Run:
 
 ```bash
 python daily_brief.py
 ```
+
+Test mode:
+
+```bash
+TEST_MODE=1 RADAR_MODE=brief python daily_brief.py
+```
+
+## What It Does Not Do
+
+- It does not invent releases, prices, dates, benchmarks, or availability.
+- It does not scrape aggressively.
+- It does not publish automatically to social platforms.
+- It does not rely on AI-generated text inside images.
+- It does not require logos or avatar assets to run.

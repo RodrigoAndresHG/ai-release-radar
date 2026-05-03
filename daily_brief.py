@@ -519,6 +519,7 @@ def pick_best_article(articles):
 
 
 def get_top_releases(limit=3, articles=None):
+    # Selecciona releases reales sobre ruido editorial y diversifica proveedor/producto.
     if articles is None:
         articles, _ = fetch_new_articles()
 
@@ -1007,6 +1008,7 @@ URL verificable.
 
 
 def generate_signal(best):
+    # Genera solo el texto de Telegram; la imagen se compone en una capa separada.
     today = datetime.now().strftime("%Y-%m-%d")
 
     if not best:
@@ -1301,6 +1303,7 @@ def build_diagram_texts(release, template):
 
 
 def build_image_prompt(release, content_text):
+    # OpenAI Images genera exclusivamente fondo abstracto sin texto ni logos.
     template = image_template(release)
 
     return f"""
@@ -1528,6 +1531,7 @@ def create_fallback_background(output_path=BACKGROUND_IMAGE_PATH):
 
 
 def generate_background_image(prompt):
+    # Si falla la imagen de OpenAI, se mantiene el flujo con un fondo fallback local.
     output_dir = "output"
     output_path = BACKGROUND_IMAGE_PATH
     os.makedirs(output_dir, exist_ok=True)
@@ -1732,6 +1736,7 @@ def draw_brand_footer(image, draw, brand, fonts):
 
 
 def compose_instagram_image(background_path, release, content_text):
+    # Pillow escribe todo el texto exacto, diagramas, logos y branding final.
     from PIL import Image, ImageDraw
 
     output_path = INSTAGRAM_IMAGE_PATH
@@ -1831,6 +1836,7 @@ def generate_content_image_status(release, content_text):
 # Enviar a Telegram (1 mensaje idealmente)
 # -----------------------------
 def send_to_telegram(text: str):
+    # Envio principal por Telegram; parte el mensaje si supera el limite practico.
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 
     # Telegram límite ~4096. Buscamos 1 mensaje; si se pasa, lo partimos.
@@ -1846,6 +1852,7 @@ def send_to_telegram(text: str):
 
 
 def send_telegram_photo(file_path, caption=None):
+    # Envia la imagen final compuesta por Pillow, no el fondo generado por IA.
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
     with open(file_path, "rb") as image_file:
         response = requests.post(

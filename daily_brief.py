@@ -101,6 +101,7 @@ HISTORY_FILE = f"history_{RADAR_MODE}.json"
 SELECTED_RELEASE_FILE = "selected_release.json"
 INSTAGRAM_IMAGE_PATH = os.path.join("output", "instagram_release.png")
 BACKGROUND_IMAGE_PATH = os.path.join("output", "background.png")
+LOGO_DIR = os.path.join("assets", "logos")
 RECENT_HOURS = 72  # solo tendencias recientes (3 dias)
 MIN_RELEASE_SCORE = 45
 
@@ -1067,6 +1068,29 @@ def compact_image_title(release, max_chars=60):
     return safe_image_text(title, max_chars=max_chars, fallback=fallback)
 
 
+def _trim_bad_title_ending(title):
+    bad_endings = {"de", "y", "con", "para", "por", "en", "a", "el", "la", "los", "las", ","}
+    words = title.strip(" -:|.,").split()
+    while words and words[-1].lower().strip(",") in bad_endings:
+        words = words[:-1]
+    return " ".join(words).strip(" -:|.,")
+
+
+def build_short_image_title(release):
+    raw_text = f"{release.get('title', '')} {release.get('summary', '')} {release.get('link', '')}".lower()
+
+    if "claude code" in raw_text:
+        return "Claude Code mejora trabajo remoto"
+    if "gemini" in raw_text and ("deprecated" in raw_text or "deprecation" in raw_text):
+        return "Gemini exige actualizar video"
+    if "openai" in raw_text and "aws" in raw_text:
+        return "OpenAI llega a AWS"
+
+    title = compact_image_title(release, max_chars=48)
+    title = _trim_bad_title_ending(title)
+    return title or f"{canonical_provider_name(provider_name(release))} actualiza IA"
+
+
 def image_template(release):
     text = f"{release.get('title', '')} {release.get('summary', '')} {release.get('link', '')}".lower()
 
@@ -1124,16 +1148,68 @@ def image_product_name(release):
     return canonical_products.get(product, safe_image_text(product, max_chars=24, fallback="Producto IA"))
 
 
+def get_logo_path(provider, product):
+    text = f"{provider or ''} {product or ''}".lower()
+    candidates = []
+
+    if "aws" in text or "amazon" in text:
+        candidates.append("aws.png")
+    if "openai" in text or "chatgpt" in text or "gpt" in text:
+        candidates.append("openai.png")
+    if "claude" in text:
+        candidates.extend(["claude.png", "anthropic.png"])
+    if "anthropic" in text:
+        candidates.append("anthropic.png")
+    if "gemini" in text:
+        candidates.extend(["gemini.png", "google.png"])
+    if "google" in text or "vertex" in text or "deepmind" in text:
+        candidates.append("google.png")
+
+    for filename in candidates:
+        logo_path = os.path.join(LOGO_DIR, filename)
+        if os.path.exists(logo_path):
+            return logo_path
+    return None
+
+
+def draw_logo(base_image, logo_path, x, y, size):
+    if not logo_path or not os.path.exists(logo_path):
+        return
+
+    try:
+        from PIL import Image
+
+        with Image.open(logo_path) as logo:
+            logo = logo.convert("RGBA")
+            width, height = logo.size
+            if not width or not height:
+                return
+
+            scale = size / max(width, height)
+            resized = logo.resize((max(1, int(width * scale)), max(1, int(height * scale))), Image.LANCZOS)
+            paste_x = int(x + (size - resized.size[0]) / 2)
+            paste_y = int(y + (size - resized.size[1]) / 2)
+            base_image.alpha_composite(resized, (paste_x, paste_y))
+    except Exception as exc:
+        print(f"No se pudo dibujar logo local {logo_path}. Error: {exc}")
+
+
 def build_diagram_texts(release, template):
     raw_text = f"{release.get('title', '')} {release.get('summary', '')} {release.get('link', '')}".lower()
     provider = canonical_provider_name(provider_name(release))
     product = image_product_name(release)
 
     if template == "FLOW":
+        if "aws" in raw_text and provider == "OpenAI":
+            return {
+                "node_1": "OpenAI",
+                "node_2": "AWS",
+                "node_3": "Apps",
+            }
         return {
-            "node_1": "Fuente",
+            "node_1": provider,
             "node_2": product if product not in {"API", provider} else "Modelo",
-            "node_3": "Aplicación",
+            "node_3": "Apps",
         }
 
     if template == "BEFORE_AFTER":
@@ -1251,7 +1327,7 @@ def _text_width(text, font):
     return bbox[2] - bbox[0]
 
 
-def wrap_text(text, font, max_width, max_lines):
+def wrap_text(text, font, max_width, max_lines, add_ellipsis=True):
     words = safe_image_text(text, max_chars=120).split()
     lines = []
     current = ""
@@ -1265,7 +1341,7 @@ def wrap_text(text, font, max_width, max_lines):
         if current:
             lines.append(current)
         current = word
-        if len(lines) == max_lines:
+        if len(lines) >= max_lines:
             break
 
     if current and len(lines) < max_lines:
@@ -1277,9 +1353,35 @@ def wrap_text(text, font, max_width, max_lines):
     if lines and _text_width(lines[-1], font) > max_width:
         while lines[-1] and _text_width(lines[-1] + "...", font) > max_width:
             lines[-1] = lines[-1][:-1].rstrip()
-        lines[-1] = (lines[-1] + "...").strip()
+        if add_ellipsis:
+            lines[-1] = (lines[-1] + "...").strip()
 
+    lines = [_trim_bad_title_ending(line) for line in lines]
+    lines = [line for line in lines if line]
     return lines or ["Cambio importante"]
+
+
+def fit_wrapped_title(text, max_width, max_lines=2, start_size=60, min_size=42):
+    title = build_short_text_title(text)
+
+    for size in range(start_size, min_size - 1, -2):
+        font = load_font(size, bold=True)
+        lines = wrap_text(title, font, max_width, max_lines, add_ellipsis=False)
+        if len(lines) <= max_lines and all(_text_width(line, font) <= max_width for line in lines):
+            return font, lines
+
+    fallback = _trim_bad_title_ending(safe_image_text(title, max_chars=42, fallback="Cambio importante"))
+    font = load_font(min_size, bold=True)
+    return font, wrap_text(fallback, font, max_width, max_lines, add_ellipsis=False)
+
+
+def build_short_text_title(text):
+    title = safe_image_text(text, max_chars=60, fallback="Cambio importante")
+    title = _trim_bad_title_ending(title)
+    if len(title) <= 48:
+        return title
+    title = safe_image_text(title, max_chars=48, fallback="Cambio importante")
+    return _trim_bad_title_ending(title)
 
 
 def draw_rounded_rectangle(draw, box, radius, fill, outline=None, width=1):
@@ -1307,12 +1409,15 @@ def draw_arrow(draw, start, end, fill=(125, 231, 255, 220), width=5):
 
 def get_image_visual_data(release):
     template = image_template(release)
+    provider = canonical_provider_name(provider_name(release))
+    product = image_product_name(release)
     return {
-        "title": compact_image_title(release, max_chars=60),
+        "title": build_short_image_title(release),
         "template": template,
-        "provider": canonical_provider_name(provider_name(release)),
-        "product": image_product_name(release),
+        "provider": provider,
+        "product": product,
         "diagram_texts": build_diagram_texts(release, template),
+        "logo_path": get_logo_path(provider, product),
         "brand": "Rodrigo Hered IA",
     }
 
@@ -1402,7 +1507,14 @@ def _draw_centered_text(draw, text, center_x, y, font, fill, max_width, max_line
     return y
 
 
-def _draw_card(draw, box, text, font, fill=(255, 255, 255, 245)):
+def logo_for_label(data, label):
+    label = label or ""
+    if label.lower() in {"apps", "apps / empresas", "aplicación", "aplicacion"}:
+        return None
+    return get_logo_path(label, label)
+
+
+def _draw_card(base_image, draw, box, text, font, fill=(255, 255, 255, 245), logo_path=None):
     draw_rounded_rectangle(
         draw,
         box,
@@ -1412,16 +1524,23 @@ def _draw_card(draw, box, text, font, fill=(255, 255, 255, 245)):
         width=2,
     )
     x1, y1, x2, y2 = box
+    if logo_path:
+        draw_logo(base_image, logo_path, x1 + (x2 - x1 - 42) / 2, y1 + 22, 42)
+        text_y_offset = 76
+    else:
+        text_y_offset = 0
+
     text_lines = wrap_text(text, font, max_width=(x2 - x1 - 44), max_lines=2)
     total_height = len(text_lines) * 30 + (len(text_lines) - 1) * 8
-    text_y = y1 + ((y2 - y1) - total_height) / 2 - 2
+    available_top = y1 + text_y_offset
+    text_y = available_top + ((y2 - available_top) - total_height) / 2 - 2
     for line in text_lines:
         bbox = draw.textbbox((0, 0), line, font=font)
         draw.text((x1 + (x2 - x1 - (bbox[2] - bbox[0])) / 2, text_y), line, font=font, fill=fill)
         text_y += 38
 
 
-def _compose_flow(draw, data, fonts):
+def _compose_flow(base_image, draw, data, fonts):
     texts = data["diagram_texts"]
     y = 440
     w = 250
@@ -1435,16 +1554,17 @@ def _compose_flow(draw, data, fonts):
     ]
     labels = [texts["node_1"], texts["node_2"], texts["node_3"]]
     for box, label in zip(boxes, labels):
-        _draw_card(draw, box, label, fonts["diagram"])
+        _draw_card(base_image, draw, box, label, fonts["diagram"], logo_path=logo_for_label(data, label))
     draw_arrow(draw, (boxes[0][2] + 12, y + h / 2), (boxes[1][0] - 12, y + h / 2))
     draw_arrow(draw, (boxes[1][2] + 12, y + h / 2), (boxes[2][0] - 12, y + h / 2))
 
 
-def _compose_before_after(draw, data, fonts):
+def _compose_before_after(base_image, draw, data, fonts):
     texts = data["diagram_texts"]
     left = (92, 365, 496, 675)
     right = (584, 365, 988, 675)
     label_font = fonts["small_bold"]
+    draw_logo(base_image, data.get("logo_path"), 508, 300, 64)
 
     for box, label, body in [
         (left, texts["before_label"], texts["before_text"]),
@@ -1465,7 +1585,7 @@ def _compose_before_after(draw, data, fonts):
     draw_arrow(draw, (516, 520), (564, 520), fill=(125, 231, 255, 230), width=6)
 
 
-def _compose_architecture(draw, data, fonts):
+def _compose_architecture(base_image, draw, data, fonts):
     texts = data["diagram_texts"]
     boxes = [
         (300, 308, 780, 418, texts["top"]),
@@ -1482,7 +1602,15 @@ def _compose_architecture(draw, data, fonts):
             outline=(120, 220, 255, 110),
             width=2,
         )
-        _draw_centered_text(draw, label, (x1 + x2) / 2, y1 + 36, fonts["diagram"], (255, 255, 255, 245), x2 - x1 - 64, 1)
+        logo_path = logo_for_label(data, label)
+        if logo_path:
+            draw_logo(base_image, logo_path, x1 + 26, y1 + 28, 54)
+            text_center = (x1 + x2) / 2 + 18
+            max_width = x2 - x1 - 120
+        else:
+            text_center = (x1 + x2) / 2
+            max_width = x2 - x1 - 64
+        _draw_centered_text(draw, label, text_center, y1 + 36, fonts["diagram"], (255, 255, 255, 245), max_width, 1)
 
     draw_arrow(draw, (540, 432), (540, 462), fill=(125, 231, 255, 220), width=6)
     draw_arrow(draw, (540, 612), (540, 652), fill=(125, 231, 255, 220), width=6)
@@ -1506,18 +1634,17 @@ def compose_instagram_image(background_path, release, content_text):
     draw = ImageDraw.Draw(image, "RGBA")
 
     fonts = {
-        "title": load_font(60, bold=True),
         "diagram": load_font(30, bold=True),
         "small_bold": load_font(24, bold=True),
         "brand": load_font(34, bold=True),
     }
 
     margin = 72
-    title_lines = wrap_text(data["title"], fonts["title"], 1080 - 2 * margin, max_lines=2)
+    title_font, title_lines = fit_wrapped_title(data["title"], 1080 - 2 * margin, max_lines=2)
     title_y = 72
     for line in title_lines:
-        bbox = draw.textbbox((0, 0), line, font=fonts["title"])
-        draw.text((margin, title_y), line, font=fonts["title"], fill=(255, 255, 255, 248))
+        bbox = draw.textbbox((0, 0), line, font=title_font)
+        draw.text((margin, title_y), line, font=title_font, fill=(255, 255, 255, 248))
         title_y += (bbox[3] - bbox[1]) + 14
 
     draw_rounded_rectangle(
@@ -1530,11 +1657,11 @@ def compose_instagram_image(background_path, release, content_text):
     )
 
     if data["template"] == "BEFORE_AFTER":
-        _compose_before_after(draw, data, fonts)
+        _compose_before_after(image, draw, data, fonts)
     elif data["template"] == "ARCHITECTURE":
-        _compose_architecture(draw, data, fonts)
+        _compose_architecture(image, draw, data, fonts)
     else:
-        _compose_flow(draw, data, fonts)
+        _compose_flow(image, draw, data, fonts)
 
     brand = data["brand"]
     bbox = draw.textbbox((0, 0), brand, font=fonts["brand"])

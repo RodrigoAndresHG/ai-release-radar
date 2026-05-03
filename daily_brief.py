@@ -1038,76 +1038,101 @@ def compact_image_title(release, max_chars=60):
     return title[: max_chars - 3].rstrip() + "..."
 
 
-def image_diagram_style(release):
+def image_template(release):
     text = f"{release.get('title', '')} {release.get('summary', '')} {release.get('link', '')}".lower()
 
     if _matches_any(text, ["deprecated", "deprecation", "pricing", "availability", "available", "lower latency"]):
-        return (
-            "Before vs After",
-            "Show two clean columns: before on the left, after on the right, with 2 short labels per side.",
-        )
+        return "BEFORE_AFTER"
     if _matches_any(text, ["api", "sdk", "agents", "agent", "tools", "function calling", "vertex ai"]):
-        return (
-            "Simple architecture",
-            "Show 3-5 blocks connected like a product architecture: user, model/API, tools/data, output.",
-        )
-    return (
-        "Flow",
-        "Show a simple A -> B -> C process with 3 clean blocks and directional arrows.",
-    )
+        return "ARCHITECTURE"
+    return "FLOW"
+
+
+def image_template_instruction(template):
+    instructions = {
+        "FLOW": (
+            "Use the FLOW template only: three clean blocks in one horizontal sequence, "
+            "A -> B -> C, with arrows between blocks."
+        ),
+        "BEFORE_AFTER": (
+            "Use the BEFORE_AFTER template only: two clean columns labeled exactly "
+            "ANTES and DESPUES, with [X] -> [Y] as the central comparison."
+        ),
+        "ARCHITECTURE": (
+            "Use the ARCHITECTURE template only: a vertical Top -> Middle -> Bottom "
+            "system structure with 3-5 connected blocks."
+        ),
+    }
+    return instructions.get(template, instructions["FLOW"])
 
 
 def build_image_prompt(release, content_text):
     title = compact_image_title(release)
     provider_product = provider_product_label(release)
-    diagram_style, diagram_instruction = image_diagram_style(release)
+    template = image_template(release)
+    template_instruction = image_template_instruction(template)
     summary = clean_summary_text(release.get("summary", ""))[:500]
 
     return f"""
-Create a 1080x1080 Instagram image with a fixed premium visual identity for "Rodri HeredIA".
+Create a 1080x1080 Instagram image with a fixed premium visual identity for "Rodrigo Hered IA".
 Make it look like a real system explanation created by a CTO, not a generic AI poster.
 
-MANDATORY LAYOUT:
-- Top 20%: short, bold, mobile-readable headline.
-- Center 60%: simple visual diagram explaining the concept.
-- Bottom 20%: subtle, clean brand area with the text "Rodri HeredIA".
+STEP 1 - SELECTED TEMPLATE:
+- Use exactly one visual template: {template}.
+- Template meaning:
+  FLOW = how something works.
+  BEFORE_AFTER = change or comparison.
+  ARCHITECTURE = system view.
 
-HEADLINE:
-- Use this exact headline, maximum 60 characters:
+STEP 2 - STRICT 1080x1080 LAYOUT:
+TOP 20%:
+- Strong title, clean and bold.
+- Use this exact title, max 60 characters:
 "{title}"
-- Do not add long subtitles.
-- Avoid technical clutter, version numbers, raw endpoint names, and small unreadable text.
 
-DIAGRAM:
-- Diagram style: {diagram_style}.
-- {diagram_instruction}
-- Max 3-5 diagram elements.
-- The diagram must communicate: what changed, why it matters, and how it looks as a system or process.
+CENTER 60%:
+- Diagram based on the selected template.
+- {template_instruction}
+- The diagram must communicate what changed, why it matters, and how it works as a system or process.
 - Include a small provider/product label: "{provider_product}".
+- Max 3-5 diagram elements.
 
-VISUAL STYLE:
-- Dark background: black or very dark gray.
-- Minimal, premium, clean.
-- Professional system diagram style.
-- Modern UI feeling.
-- Subtle glow lines and subtle gradients only.
+BOTTOM 20%:
+- Use this exact bottom text:
+"Rodrigo Hered IA"
+- DO NOT MODIFY THIS TEXT.
+- Keep it subtle, clean, consistent, and premium.
+
+STEP 3 - VISUAL STYLE:
+- Dark background.
+- Minimal UI.
+- Clean spacing.
+- Subtle glow lines.
+- Grid alignment feel.
 - High contrast typography.
 - Mobile readable.
-- No clutter.
-- Consistent spacing, clean alignment, sharp hierarchy.
+- Max 3-5 elements.
 
-PROHIBITIONS:
+STEP 4 - FORBIDDEN:
 - No robots.
 - No brains.
 - No generic AI glowing art.
-- No stock photo style.
-- No random futuristic fantasy.
+- No stock images.
+- No fantasy visuals.
+- No clutter.
+- No long paragraphs.
 - No excessive text.
 - No tiny unreadable labels.
-- No fake logos, screenshots, charts, tables, or dense paragraphs.
 
-Tone:
-Professional, CIO-level, educational, high authority.
+STEP 5 - SYSTEM FEEL:
+- Make it look like a real system explanation created by a CTO, not a generic AI poster.
+
+STEP 6 - CONSISTENCY:
+- All images must look like the same brand.
+- Same spacing.
+- Same hierarchy.
+- Same visual logic.
+- Professional, CIO-level, educational, high authority.
 
 Context for tone only:
 Release summary: {summary}

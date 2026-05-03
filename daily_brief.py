@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import urllib.parse
 from urllib.parse import urlparse
 from datetime import datetime
@@ -142,6 +143,9 @@ def load_selected_release():
 
 
 def save_selected_release(release):
+    if release:
+        release = {**release, "human_title": build_human_title(release)}
+
     payload = {
         "selected_date_utc": selection_date(),
         "release": release,
@@ -638,15 +642,27 @@ def looks_like_version_title(title):
     return len(parts) == 1 and any(c.isdigit() for c in cleaned) and "." in cleaned
 
 
+def looks_like_date_title(title):
+    cleaned = title.strip()
+    return bool(
+        re.match(
+            r"^(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{1,2},\s+\d{4}$",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def starts_with_raw_technical_text(title):
+    cleaned = title.strip()
+    technical_prefixes = ("/", "endpoint", "api endpoint", "the /")
+    lowered = cleaned.lower()
+    return lowered.startswith(technical_prefixes) or "/" in lowered[:35]
+
+
 def clean_summary_text(summary):
-    text = " ".join((summary or "").replace("\n", " ").split())
-    while "<" in text and ">" in text:
-        start = text.find("<")
-        end = text.find(">", start)
-        if end == -1:
-            break
-        text = text[:start] + " " + text[end + 1 :]
-        text = " ".join(text.split())
+    text = re.sub(r"<[^>]+>", " ", summary or "")
+    text = re.sub(r"\s+", " ", text.replace("\n", " ")).strip()
     return text
 
 
@@ -678,22 +694,46 @@ def human_summary_fragment(summary):
     return text
 
 
-def human_title(article, max_len=110):
+def title_is_descriptive(title):
+    if not title:
+        return False
+    if looks_like_version_title(title) or looks_like_date_title(title):
+        return False
+    if starts_with_raw_technical_text(title):
+        return False
+    return len(title.split()) >= 3
+
+
+def build_human_title(article, max_len=110):
+    link = article.get("link") or ""
+    if product_key(article) == "claude_code" and "#2-1-126" in link:
+        return "Claude Code mejora login remoto, limpieza de proyectos y seleccion de modelos"
+
     title = (article.get("title") or "").replace("\n", " ").strip()
-    if title and not looks_like_version_title(title):
+    provider = provider_name(article)
+    product = provider_product_label(article).split(" / ")[-1]
+
+    if title_is_descriptive(title):
         final_title = title
     else:
         summary = human_summary_fragment(article.get("summary", ""))
-        product = provider_product_label(article).split(" / ")[-1]
         if summary:
-            final_title = f"{product} {summary}"
+            prefix = "" if summary.lower().startswith(product.lower()) else f"{product} "
+            final_title = f"{prefix}{summary}"
         else:
-            final_title = f"{product} trae una actualizacion oficial relevante"
+            final_title = f"{provider} actualiza {product} con mejoras relevantes"
 
-    final_title = final_title.rstrip(".")
+    final_title = re.sub(r"^\W+", "", final_title).strip().rstrip(".")
+    if not title_is_descriptive(final_title):
+        final_title = f"{provider} actualiza {product} con mejoras relevantes"
+
     if len(final_title) <= max_len:
         return final_title
     return final_title[: max_len - 3].rstrip() + "..."
+
+
+def human_title(article, max_len=110):
+    return build_human_title(article, max_len=max_len)
 
 
 def build_brief_top3(top_releases):
@@ -716,7 +756,7 @@ def build_brief_top3(top_releases):
         lines.extend(
             [
                 f"{i}. {provider_product_label(article)}",
-                f"   TITULAR: {human_title(article)}",
+                f"   TITULAR: {build_human_title(article)}",
                 f"   SCORE: {article.get('release_score')}",
                 f"   LINK: {article.get('link')}",
                 "",

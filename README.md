@@ -88,6 +88,8 @@ python daily_brief.py
 
 `RADAR_MODE=content` sends a publish-ready content pack: TikTok/Reel script, caption, 3 alternate hooks, comment question, final line, and link.
 
+The brief run selects the single release of the day and writes `selected_release.json`. The content run reuses that same file, so both messages are based on one shared insight.
+
 ## Daily Schedule
 
 The brief workflow runs daily at 12:00 UTC:

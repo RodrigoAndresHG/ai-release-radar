@@ -90,6 +90,7 @@ KEYWORDS = [
 ]
 
 HISTORY_FILE = f"history_{RADAR_MODE}.json"
+SELECTED_RELEASE_FILE = "selected_release.json"
 RECENT_HOURS = 72  # solo tendencias recientes (3 dias)
 MIN_RELEASE_SCORE = 45
 
@@ -119,6 +120,34 @@ def load_history():
 def save_history(seen_links):
     with open(HISTORY_FILE, "w") as f:
         json.dump(list(seen_links), f)
+
+
+def selection_date():
+    return datetime.utcnow().strftime("%Y-%m-%d")
+
+
+def load_selected_release():
+    if not os.path.exists(SELECTED_RELEASE_FILE):
+        return False, None
+    try:
+        with open(SELECTED_RELEASE_FILE, "r") as f:
+            data = json.load(f)
+    except Exception:
+        return False, None
+
+    if data.get("selected_date_utc") != selection_date():
+        return False, None
+
+    return True, data.get("release")
+
+
+def save_selected_release(release):
+    payload = {
+        "selected_date_utc": selection_date(),
+        "release": release,
+    }
+    with open(SELECTED_RELEASE_FILE, "w") as f:
+        json.dump(payload, f, indent=2)
 
 
 # -----------------------------
@@ -425,6 +454,36 @@ def pick_best_article(articles):
     return best
 
 
+def get_top_release():
+    """
+    Seleccion unica del release del dia.
+    brief selecciona y guarda selected_release.json.
+    content reutiliza ese archivo para no elegir otro item del mismo changelog.
+    """
+    if os.getenv("TEST_MODE") == "1":
+        articles = fake_test_articles()
+        new_seen = load_history()
+        print("TEST_MODE=1 activo. Usando artículos falsos.")
+        print_release_scores(articles)
+        best = pick_best_article(articles)
+        save_selected_release(best)
+        return best, new_seen
+
+    if RADAR_MODE == "content":
+        found, selected = load_selected_release()
+        if not found:
+            raise ValueError(
+                "RADAR_MODE=content requiere selected_release.json generado hoy por RADAR_MODE=brief"
+            )
+        print("Reutilizando release seleccionado desde selected_release.json.")
+        return selected, load_history()
+
+    articles, new_seen = fetch_new_articles()
+    best = pick_best_article(articles)
+    save_selected_release(best)
+    return best, new_seen
+
+
 def build_prompt(today: str, best, mode: str):
     # best es 1 solo release detectado por scoring deterministico
     title = (best.get("title") or "").replace("\n", " ").strip()
@@ -580,15 +639,7 @@ def send_to_telegram(text: str):
 # Ejecución principal
 # -----------------------------
 if __name__ == "__main__":
-    if os.getenv("TEST_MODE") == "1":
-        articles = fake_test_articles()
-        new_seen = load_history()
-        print("TEST_MODE=1 activo. Usando artículos falsos.")
-        print_release_scores(articles)
-    else:
-        articles, new_seen = fetch_new_articles()
-
-    best = pick_best_article(articles)
+    best, new_seen = get_top_release()
     msg = generate_signal(best)
     send_to_telegram(msg)
     save_history(new_seen)

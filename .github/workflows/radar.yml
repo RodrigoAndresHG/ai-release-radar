@@ -13,7 +13,6 @@ jobs:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-      X_RSS_FEEDS: ${{ secrets.X_RSS_FEEDS }}
 
     steps:
       - name: Check out repository

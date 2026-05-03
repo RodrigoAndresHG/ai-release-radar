@@ -32,22 +32,46 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 # Configuración
 # -----------------------------
 OFFICIAL_SOURCES = [
-    "https://openai.com/blog/rss",
-    "https://www.anthropic.com/news/rss",
+    # OpenAI News. TODO: OpenAI API changelog no expone RSS oficial estable.
+    "https://openai.com/news/rss.xml",
+    # Claude Code changelog. TODO: Claude app release notes y Anthropic API release notes no exponen RSS oficial estable.
+    "https://code.claude.com/docs/en/changelog/rss.xml",
+    # Vertex AI Generative AI release notes.
+    "https://docs.cloud.google.com/feeds/generative-ai-on-vertex-ai-release-notes.xml",
+    # Google Gemini product updates. TODO: Gemini API changelog no expone RSS oficial estable.
+    "https://blog.google/products-and-platforms/products/gemini/rss/",
+    # Google DeepMind blog.
     "https://deepmind.google/blog/rss.xml",
 ]
 
 OFFICIAL_DOMAINS = {
     "openai.com",
     "www.openai.com",
+    "platform.openai.com",
+    "help.openai.com",
     "anthropic.com",
     "www.anthropic.com",
+    "docs.anthropic.com",
+    "platform.claude.com",
+    "support.claude.com",
+    "code.claude.com",
     "deepmind.google",
     "www.deepmind.google",
     "blog.google",
     "www.blog.google",
     "ai.googleblog.com",
+    "ai.google.dev",
+    "cloud.google.com",
+    "docs.cloud.google.com",
 }
+
+OFFICIAL_SOURCE_TODOS = [
+    "OpenAI API changelog: https://platform.openai.com/docs/changelog (sin RSS oficial estable)",
+    "ChatGPT release notes: https://help.openai.com/en/articles/6825453-chatgpt-release-notes (sin RSS oficial estable)",
+    "Anthropic API release notes: https://docs.anthropic.com/en/release-notes/api (sin RSS oficial estable)",
+    "Claude release notes: https://support.claude.com/en/articles/12138966-release-notes (sin RSS oficial estable)",
+    "Gemini API release notes: https://ai.google.dev/gemini-api/docs/changelog (sin RSS oficial estable)",
+]
 
 # Fallback: radar de releases vía Google News RSS (gratis)
 KEYWORDS = [
@@ -108,12 +132,12 @@ def parse_feed(url, limit=10):
 
         domain = urlparse(link).netloc
 
-        # published_parsed: struct_time (si está disponible)
+        # published_parsed/updated_parsed: struct_time (si está disponible)
         published_ts = None
-        if hasattr(entry, "published_parsed") and entry.published_parsed:
+        parsed_time = getattr(entry, "published_parsed", None) or getattr(entry, "updated_parsed", None)
+        if parsed_time:
             try:
-                import time
-                published_ts = int(time.mktime(entry.published_parsed))
+                published_ts = int(time.mktime(parsed_time))
             except Exception:
                 published_ts = None
 
@@ -173,6 +197,7 @@ def release_score(article):
         "anthropic.com",
         "www.anthropic.com",
         "docs.anthropic.com",
+        "platform.claude.com",
         "support.claude.com",
         "code.claude.com",
         "deepmind.google",
@@ -181,6 +206,7 @@ def release_score(article):
         "www.blog.google",
         "ai.google.dev",
         "cloud.google.com",
+        "docs.cloud.google.com",
         "github.com",
     }
     official_release_paths = [
@@ -288,8 +314,6 @@ def release_score(article):
     )
     if ceo_or_opinion and not has_concrete_release:
         score -= 30
-    if source_kind == "x_rss" and not has_concrete_release:
-        score -= 20
 
     published_ts = article.get("published_ts")
     if is_recent(published_ts, hours=RECENT_HOURS):
@@ -311,11 +335,7 @@ def fetch_new_articles():
     new_seen = set(seen_links)
     articles = []
 
-    # 0) Leer feeds de X desde .env
-    x_feeds_raw = os.getenv("X_RSS_FEEDS", "").strip()
-    x_feeds = [u.strip() for u in x_feeds_raw.split(",") if u.strip()] if x_feeds_raw else []
-
-    # 1) Oficiales primero
+    # 1) Fuentes oficiales primero
     for url in OFFICIAL_SOURCES:
         for a in parse_feed(url, limit=15):
             if not a.get("link") or a["link"] in seen_links:
@@ -325,20 +345,7 @@ def fetch_new_articles():
             articles.append({**a, "tier": tier, "source_kind": "official_rss"})
             new_seen.add(a["link"])
 
-    # 2) Cuentas oficiales y CEOs (X RSS)
-    for url in x_feeds:
-        for a in parse_feed(url, limit=20):
-            if not a.get("link") or a["link"] in seen_links:
-                continue
-
-            if not is_recent(a.get("published_ts")):
-                continue
-
-            tier = "confirmed" if a.get("domain") in OFFICIAL_DOMAINS else "trend"
-            articles.append({**a, "tier": tier, "source_kind": "x_rss"})
-            new_seen.add(a["link"])
-
-    # 3) Fallback Google News si no hay nada o si lo oficial no llega al umbral.
+    # 2) Fallback Google News si no hay nada o si lo oficial no llega al umbral.
     if not articles or max(release_score(a) for a in articles) < MIN_RELEASE_SCORE:
         for kw in KEYWORDS:
             url = google_news_rss(kw)
@@ -354,6 +361,38 @@ def fetch_new_articles():
                 new_seen.add(a["link"])
 
     return articles, new_seen
+
+
+def fake_test_articles():
+    now_ts = int(time.time())
+    return [
+        {
+            "title": "OpenAI releases GPT-5.5 in the API with lower latency and new coding capabilities.",
+            "link": "https://platform.openai.com/docs/changelog/test-gpt-5-5",
+            "summary": "Official simulated API release with a new GPT model, lower latency, coding capabilities, and availability for builders.",
+            "source": "test_mode",
+            "domain": "platform.openai.com",
+            "published_ts": now_ts,
+            "tier": "confirmed",
+            "source_kind": "official_rss",
+        },
+        {
+            "title": "CEO predicts AGI will arrive soon.",
+            "link": "https://example.com/ceo-predicts-agi",
+            "summary": "Opinion and prediction without a concrete model release, API change, pricing update, or feature launch.",
+            "source": "test_mode",
+            "domain": "example.com",
+            "published_ts": now_ts,
+            "tier": "trend",
+            "source_kind": "test_noise",
+        },
+    ]
+
+
+def print_release_scores(articles):
+    for article in articles:
+        print(f"release_score={release_score(article)} | {article.get('title')}")
+
 
 # -----------------------------
 # Elegir 1 mejor release + generar mensaje estructurado
@@ -517,7 +556,14 @@ def send_to_telegram(text: str):
 # Ejecución principal
 # -----------------------------
 if __name__ == "__main__":
-    articles, new_seen = fetch_new_articles()
+    if os.getenv("TEST_MODE") == "1":
+        articles = fake_test_articles()
+        new_seen = load_history()
+        print("TEST_MODE=1 activo. Usando artículos falsos.")
+        print_release_scores(articles)
+    else:
+        articles, new_seen = fetch_new_articles()
+
     best = pick_best_article(articles)
     msg = generate_signal(best)
     send_to_telegram(msg)

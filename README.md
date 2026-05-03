@@ -27,13 +27,14 @@ The agent uses release-first scoring, so official changelogs and concrete availa
 
 The script currently checks:
 
-- OpenAI official RSS
-- Anthropic official RSS
-- Google DeepMind RSS
-- Optional RSS feeds from `X_RSS_FEEDS`
+- OpenAI News RSS
+- Claude Code changelog RSS
+- Vertex AI Generative AI release notes feed
+- Google Gemini product updates RSS
+- Google DeepMind blog RSS
 - Google News RSS fallback queries focused on release notes, changelogs, new models, Gemini API, Vertex AI, Claude Code, ChatGPT, and OpenAI API
 
-Optional `X_RSS_FEEDS` should be a comma-separated list of RSS URLs.
+Some official release pages do not expose a stable RSS feed yet, so they are tracked as code TODOs instead of using fragile scraping: OpenAI API changelog, ChatGPT release notes, Anthropic API release notes, Claude release notes, and Gemini API release notes.
 
 ## Create A Telegram Bot
 
@@ -63,10 +64,7 @@ In your GitHub repository:
 OPENAI_API_KEY
 TELEGRAM_BOT_TOKEN
 TELEGRAM_CHAT_ID
-X_RSS_FEEDS
 ```
-
-`X_RSS_FEEDS` can be empty if you do not use external RSS feeds.
 
 Do not commit a real `.env` file or real secret values.
 
@@ -109,7 +107,6 @@ Create a local `.env` file using `.env.example` as a guide:
 OPENAI_API_KEY=
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=
-X_RSS_FEEDS=
 ```
 
 Then run:

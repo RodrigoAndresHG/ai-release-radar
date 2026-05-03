@@ -484,11 +484,72 @@ def get_top_releases(limit=3, articles=None):
         if score >= MIN_RELEASE_SCORE:
             scored.append({**article, "release_score": score})
 
-    return sorted(
+    ranked = sorted(
         scored,
         key=lambda a: (a.get("release_score", 0), a.get("published_ts") or 0),
         reverse=True,
-    )[:limit]
+    )
+
+    return diversify_releases(ranked, limit=limit)
+
+
+def product_key(article):
+    text = f"{article.get('title', '')} {article.get('summary', '')} {article.get('link', '')}".lower()
+
+    if "claude code" in text or "code.claude.com" in text:
+        return "claude_code"
+    if "chatgpt" in text:
+        return "chatgpt"
+    if "gemini api" in text or "ai.google.dev" in text:
+        return "gemini_api"
+    if "platform.openai.com" in text or "openai api" in text:
+        return "openai_api"
+    if "openai" in text or "gpt" in text or "sora" in text:
+        return "openai"
+    if "gemini" in text:
+        return "gemini"
+    if "vertex ai" in text or "docs.cloud.google.com" in text:
+        return "vertex_ai"
+    if "deepmind" in text:
+        return "deepmind"
+
+    domain = (article.get("domain") or "").lower()
+    return domain or "unknown"
+
+
+def diversify_releases(ranked_articles, limit=3):
+    selected = []
+    used_products = set()
+    used_providers = set()
+
+    def add_if_allowed(article, require_new_provider=False):
+        provider = provider_name(article)
+        product = product_key(article)
+        provider_product = (provider, product)
+
+        if provider_product in used_products:
+            return False
+        if require_new_provider and provider in used_providers:
+            return False
+
+        selected.append(article)
+        used_products.add(provider_product)
+        used_providers.add(provider)
+        return True
+
+    for article in ranked_articles:
+        if len(selected) >= limit:
+            break
+        add_if_allowed(article, require_new_provider=True)
+
+    for article in ranked_articles:
+        if len(selected) >= limit:
+            break
+        if article in selected:
+            continue
+        add_if_allowed(article, require_new_provider=False)
+
+    return selected[:limit]
 
 
 def fetch_articles_for_selection():
@@ -550,11 +611,89 @@ def provider_name(article):
     return domain or "Fuente oficial"
 
 
-def short_title(article, max_len=110):
+def provider_product_label(article):
+    provider = provider_name(article)
+    product = product_key(article)
+    labels = {
+        "claude_code": "Claude Code",
+        "chatgpt": "ChatGPT",
+        "openai_api": "API",
+        "openai": "OpenAI",
+        "gemini_api": "Gemini API",
+        "gemini": "Gemini",
+        "vertex_ai": "Vertex AI",
+        "deepmind": "DeepMind",
+    }
+    product_label = labels.get(product)
+    return f"{provider} / {product_label}" if product_label else provider
+
+
+def looks_like_version_title(title):
+    cleaned = title.strip().lower().lstrip("v")
+    if not cleaned:
+        return True
+    if len(cleaned) <= 12 and all(c.isdigit() or c in ".-" for c in cleaned):
+        return True
+    parts = cleaned.split()
+    return len(parts) == 1 and any(c.isdigit() for c in cleaned) and "." in cleaned
+
+
+def clean_summary_text(summary):
+    text = " ".join((summary or "").replace("\n", " ").split())
+    while "<" in text and ">" in text:
+        start = text.find("<")
+        end = text.find(">", start)
+        if end == -1:
+            break
+        text = text[:start] + " " + text[end + 1 :]
+        text = " ".join(text.split())
+    return text
+
+
+def human_summary_fragment(summary):
+    text = clean_summary_text(summary)
+    replacements = [
+        (" for Claude Code", ""),
+        (" for Gemini API", ""),
+        (", and ", ", "),
+        (" and ", " y "),
+        ("Improves ", "mejora "),
+        ("Fixes ", "corrige "),
+        ("Adds ", "agrega "),
+        ("New ", "nuevo "),
+        ("remote login", "login remoto"),
+        ("project cleanup", "limpieza de proyectos"),
+        ("MCP gateways", "gateways MCP"),
+        ("gateways", "gateways"),
+        ("terminal rendering", "visualizacion de terminal"),
+        ("shell handling", "manejo de terminal"),
+        ("lower latency", "menor latencia"),
+        ("coding capabilities", "capacidades de programacion"),
+        ("realtime audio", "audio en tiempo real"),
+        ("generally available", "disponible de forma general"),
+        ("available", "disponible"),
+    ]
+    for old, new in replacements:
+        text = text.replace(old, new)
+    return text
+
+
+def human_title(article, max_len=110):
     title = (article.get("title") or "").replace("\n", " ").strip()
-    if len(title) <= max_len:
-        return title
-    return title[: max_len - 3].rstrip() + "..."
+    if title and not looks_like_version_title(title):
+        final_title = title
+    else:
+        summary = human_summary_fragment(article.get("summary", ""))
+        product = provider_product_label(article).split(" / ")[-1]
+        if summary:
+            final_title = f"{product} {summary}"
+        else:
+            final_title = f"{product} trae una actualizacion oficial relevante"
+
+    final_title = final_title.rstrip(".")
+    if len(final_title) <= max_len:
+        return final_title
+    return final_title[: max_len - 3].rstrip() + "..."
 
 
 def build_brief_top3(top_releases):
@@ -574,9 +713,14 @@ def build_brief_top3(top_releases):
     ]
 
     for i, article in enumerate(top_releases, start=1):
-        lines.append(
-            f"{i}. {provider_name(article)} - {short_title(article)} - "
-            f"SCORE {article.get('release_score')} - {article.get('link')}"
+        lines.extend(
+            [
+                f"{i}. {provider_product_label(article)}",
+                f"   TITULAR: {human_title(article)}",
+                f"   SCORE: {article.get('release_score')}",
+                f"   LINK: {article.get('link')}",
+                "",
+            ]
         )
 
     recommendation_index = 1

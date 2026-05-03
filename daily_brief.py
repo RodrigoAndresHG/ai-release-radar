@@ -102,6 +102,7 @@ SELECTED_RELEASE_FILE = "selected_release.json"
 INSTAGRAM_IMAGE_PATH = os.path.join("output", "instagram_release.png")
 BACKGROUND_IMAGE_PATH = os.path.join("output", "background.png")
 LOGO_DIR = os.path.join("assets", "logos")
+BRAND_AVATAR_PATH = os.path.join("assets", "brand", "rodrigo.png")
 RECENT_HOURS = 72  # solo tendencias recientes (3 dias)
 MIN_RELEASE_SCORE = 45
 
@@ -1194,6 +1195,47 @@ def draw_logo(base_image, logo_path, x, y, size):
         print(f"No se pudo dibujar logo local {logo_path}. Error: {exc}")
 
 
+def get_brand_avatar_path():
+    return BRAND_AVATAR_PATH if os.path.exists(BRAND_AVATAR_PATH) else None
+
+
+def draw_circular_avatar(image, path, x, y, size):
+    if not path or not os.path.exists(path):
+        return False
+
+    try:
+        from PIL import Image, ImageDraw
+
+        with Image.open(path) as avatar:
+            avatar = avatar.convert("RGBA")
+            width, height = avatar.size
+            crop_size = min(width, height)
+            left = (width - crop_size) // 2
+            top = (height - crop_size) // 2
+            avatar = avatar.crop((left, top, left + crop_size, top + crop_size))
+            avatar = avatar.resize((size, size), Image.LANCZOS)
+
+            mask = Image.new("L", (size, size), 0)
+            mask_draw = ImageDraw.Draw(mask)
+            mask_draw.ellipse((0, 0, size - 1, size - 1), fill=255)
+            avatar.putalpha(mask)
+
+            border_size = size + 8
+            border = Image.new("RGBA", (border_size, border_size), (0, 0, 0, 0))
+            border_draw = ImageDraw.Draw(border)
+            border_draw.ellipse(
+                (0, 0, border_size - 1, border_size - 1),
+                fill=(120, 220, 255, 235),
+            )
+            border.alpha_composite(avatar, (4, 4))
+
+            image.alpha_composite(border, (int(x - 4), int(y - 4)))
+            return True
+    except Exception as exc:
+        print(f"No se pudo dibujar avatar de marca {path}. Error: {exc}")
+        return False
+
+
 def build_diagram_texts(release, template):
     raw_text = f"{release.get('title', '')} {release.get('summary', '')} {release.get('link', '')}".lower()
     provider = canonical_provider_name(provider_name(release))
@@ -1616,6 +1658,34 @@ def _compose_architecture(base_image, draw, data, fonts):
     draw_arrow(draw, (540, 612), (540, 652), fill=(125, 231, 255, 220), width=6)
 
 
+def draw_brand_footer(image, draw, brand, fonts):
+    subtitle = "AI Builder / CIO"
+    avatar_path = get_brand_avatar_path()
+    avatar_size = 72
+    gap = 18
+    brand_font = fonts["brand"]
+    subtitle_font = fonts["brand_subtitle"]
+
+    brand_bbox = draw.textbbox((0, 0), brand, font=brand_font)
+    subtitle_bbox = draw.textbbox((0, 0), subtitle, font=subtitle_font)
+    text_width = max(brand_bbox[2] - brand_bbox[0], subtitle_bbox[2] - subtitle_bbox[0])
+
+    if avatar_path:
+        total_width = avatar_size + gap + text_width
+        start_x = (1080 - total_width) / 2
+        avatar_y = 922
+        text_x = start_x + avatar_size + gap
+        draw_circular_avatar(image, avatar_path, start_x, avatar_y, avatar_size)
+        draw.text((text_x, 922), brand, font=brand_font, fill=(255, 255, 255, 235))
+        draw.text((text_x, 962), subtitle, font=subtitle_font, fill=(125, 231, 255, 210))
+        return
+
+    brand_x = (1080 - (brand_bbox[2] - brand_bbox[0])) / 2
+    subtitle_x = (1080 - (subtitle_bbox[2] - subtitle_bbox[0])) / 2
+    draw.text((brand_x, 918), brand, font=brand_font, fill=(255, 255, 255, 235))
+    draw.text((subtitle_x, 960), subtitle, font=subtitle_font, fill=(125, 231, 255, 210))
+
+
 def compose_instagram_image(background_path, release, content_text):
     from PIL import Image, ImageDraw
 
@@ -1637,6 +1707,7 @@ def compose_instagram_image(background_path, release, content_text):
         "diagram": load_font(30, bold=True),
         "small_bold": load_font(24, bold=True),
         "brand": load_font(34, bold=True),
+        "brand_subtitle": load_font(20, bold=False),
     }
 
     margin = 72
@@ -1663,14 +1734,7 @@ def compose_instagram_image(background_path, release, content_text):
     else:
         _compose_flow(image, draw, data, fonts)
 
-    brand = data["brand"]
-    bbox = draw.textbbox((0, 0), brand, font=fonts["brand"])
-    draw.text(
-        ((1080 - (bbox[2] - bbox[0])) / 2, 948),
-        brand,
-        font=fonts["brand"],
-        fill=(255, 255, 255, 230),
-    )
+    draw_brand_footer(image, draw, data["brand"], fonts)
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     image.convert("RGB").save(output_path, "PNG")

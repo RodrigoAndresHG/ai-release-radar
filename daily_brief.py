@@ -1081,15 +1081,19 @@ def build_short_image_title(release):
     raw_text = f"{release.get('title', '')} {release.get('summary', '')} {release.get('link', '')}".lower()
 
     if "claude code" in raw_text:
-        return "Claude Code mejora trabajo remoto"
+        return "Claude Code elimina fricción en trabajo remoto"
     if "gemini" in raw_text and ("deprecated" in raw_text or "deprecation" in raw_text):
-        return "Gemini exige actualizar video"
+        return "Gemini obliga a actualizar integraciones de video"
     if "openai" in raw_text and "aws" in raw_text:
-        return "OpenAI llega a AWS"
+        return "OpenAI abre acceso en AWS para equipos"
 
-    title = compact_image_title(release, max_chars=48)
+    product = image_product_name(release)
+    provider = canonical_provider_name(provider_name(release))
+    title = compact_image_title(release, max_chars=52)
+    if title and not title.lower().startswith((product.lower(), provider.lower())):
+        title = f"{product} acelera {title.lower()}"
     title = _trim_bad_title_ending(title)
-    return title or f"{canonical_provider_name(provider_name(release))} actualiza IA"
+    return safe_image_text(title, max_chars=60, fallback=f"{product} mejora trabajo con IA")
 
 
 def image_template(release):
@@ -1430,11 +1434,39 @@ def draw_rounded_rectangle(draw, box, radius, fill, outline=None, width=1):
     draw.rounded_rectangle(box, radius=radius, fill=fill, outline=outline, width=width)
 
 
-def draw_arrow(draw, start, end, fill=(125, 231, 255, 220), width=5):
+def draw_glow_rectangle(draw, box, radius, glow_color=(0, 180, 255, 60), layers=3):
+    x1, y1, x2, y2 = box
+    for layer in range(layers, 0, -1):
+        pad = layer * 5
+        alpha = max(16, glow_color[3] // layer)
+        draw.rounded_rectangle(
+            (x1 - pad, y1 - pad, x2 + pad, y2 + pad),
+            radius=radius + pad,
+            outline=(glow_color[0], glow_color[1], glow_color[2], alpha),
+            width=2,
+        )
+
+
+def draw_arrow(draw, start, end, fill=(0, 200, 255, 235), width=8):
+    shadow_start = (start[0] + 4, start[1] + 5)
+    shadow_end = (end[0] + 4, end[1] + 5)
+    draw.line([shadow_start, shadow_end], fill=(0, 0, 0, 115), width=width + 4)
     draw.line([start, end], fill=fill, width=width)
     angle = math.atan2(end[1] - start[1], end[0] - start[0])
-    arrow_len = 18
+    arrow_len = 24
     arrow_angle = math.pi / 7
+    shadow_points = [
+        shadow_end,
+        (
+            shadow_end[0] - arrow_len * math.cos(angle - arrow_angle),
+            shadow_end[1] - arrow_len * math.sin(angle - arrow_angle),
+        ),
+        (
+            shadow_end[0] - arrow_len * math.cos(angle + arrow_angle),
+            shadow_end[1] - arrow_len * math.sin(angle + arrow_angle),
+        ),
+    ]
+    draw.polygon(shadow_points, fill=(0, 0, 0, 115))
     points = [
         end,
         (
@@ -1557,12 +1589,13 @@ def logo_for_label(data, label):
 
 
 def _draw_card(base_image, draw, box, text, font, fill=(255, 255, 255, 245), logo_path=None):
+    draw_glow_rectangle(draw, box, radius=28, glow_color=(0, 180, 255, 46), layers=2)
     draw_rounded_rectangle(
         draw,
         box,
         radius=28,
-        fill=(10, 18, 26, 210),
-        outline=(120, 220, 255, 105),
+        fill=(10, 20, 30, 190),
+        outline=(0, 180, 255, 120),
         width=2,
     )
     x1, y1, x2, y2 = box
@@ -1612,19 +1645,26 @@ def _compose_before_after(base_image, draw, data, fonts):
         (left, texts["before_label"], texts["before_text"]),
         (right, texts["after_label"], texts["after_text"]),
     ]:
+        is_after = label == texts["after_label"]
+        if is_after:
+            draw_glow_rectangle(draw, box, radius=34, glow_color=(0, 200, 255, 72), layers=3)
         draw_rounded_rectangle(
             draw,
             box,
             radius=34,
-            fill=(10, 18, 26, 212),
-            outline=(120, 220, 255, 100),
+            fill=(10, 20, 30, 190),
+            outline=(0, 180, 255, 120 if is_after else 82),
             width=2,
         )
         x1, y1, x2, _ = box
-        draw.text((x1 + 34, y1 + 34), label, font=label_font, fill=(125, 231, 255, 230))
-        _draw_centered_text(draw, body, (x1 + x2) / 2, y1 + 138, fonts["diagram"], (255, 255, 255, 245), x2 - x1 - 64, 2)
+        label_fill = (0, 200, 255, 238) if is_after else (180, 180, 180, 230)
+        body_fill = (255, 255, 255, 248) if is_after else (180, 180, 180, 235)
+        if is_after:
+            _draw_centered_text(draw, body, (x1 + x2) / 2 + 2, y1 + 140, fonts["diagram"], (0, 200, 255, 90), x2 - x1 - 64, 2)
+        draw.text((x1 + 34, y1 + 34), label, font=label_font, fill=label_fill)
+        _draw_centered_text(draw, body, (x1 + x2) / 2, y1 + 138, fonts["diagram"], body_fill, x2 - x1 - 64, 2)
 
-    draw_arrow(draw, (516, 520), (564, 520), fill=(125, 231, 255, 230), width=6)
+    draw_arrow(draw, (512, 520), (568, 520), fill=(0, 200, 255, 240), width=9)
 
 
 def _compose_architecture(base_image, draw, data, fonts):
@@ -1635,13 +1675,16 @@ def _compose_architecture(base_image, draw, data, fonts):
         (210, 668, 870, 792, texts["bottom"]),
     ]
     for index, (x1, y1, x2, y2, label) in enumerate(boxes):
-        fill = (10, 18, 26, 224) if index == 1 else (10, 18, 26, 205)
+        is_after = index == len(boxes) - 1
+        if is_after:
+            draw_glow_rectangle(draw, (x1, y1, x2, y2), radius=30, glow_color=(0, 200, 255, 58), layers=3)
+        fill = (10, 20, 30, 198) if index == 1 else (10, 20, 30, 182)
         draw_rounded_rectangle(
             draw,
             (x1, y1, x2, y2),
             radius=30,
             fill=fill,
-            outline=(120, 220, 255, 110),
+            outline=(0, 180, 255, 120 if is_after else 88),
             width=2,
         )
         logo_path = logo_for_label(data, label)
@@ -1652,10 +1695,11 @@ def _compose_architecture(base_image, draw, data, fonts):
         else:
             text_center = (x1 + x2) / 2
             max_width = x2 - x1 - 64
-        _draw_centered_text(draw, label, text_center, y1 + 36, fonts["diagram"], (255, 255, 255, 245), max_width, 1)
+        text_fill = (255, 255, 255, 248) if is_after else (220, 224, 228, 238)
+        _draw_centered_text(draw, label, text_center, y1 + 36, fonts["diagram"], text_fill, max_width, 1)
 
-    draw_arrow(draw, (540, 432), (540, 462), fill=(125, 231, 255, 220), width=6)
-    draw_arrow(draw, (540, 612), (540, 652), fill=(125, 231, 255, 220), width=6)
+    draw_arrow(draw, (540, 432), (540, 462), fill=(0, 200, 255, 235), width=8)
+    draw_arrow(draw, (540, 612), (540, 652), fill=(0, 200, 255, 235), width=8)
 
 
 def draw_brand_footer(image, draw, brand, fonts):
@@ -1671,19 +1715,20 @@ def draw_brand_footer(image, draw, brand, fonts):
     text_width = max(brand_bbox[2] - brand_bbox[0], subtitle_bbox[2] - subtitle_bbox[0])
 
     if avatar_path:
-        total_width = avatar_size + gap + text_width
-        start_x = (1080 - total_width) / 2
+        start_x = 72
         avatar_y = 922
         text_x = start_x + avatar_size + gap
+        draw.ellipse(
+            (start_x - 10, avatar_y - 8, start_x + avatar_size + 12, avatar_y + avatar_size + 14),
+            fill=(0, 0, 0, 90),
+        )
         draw_circular_avatar(image, avatar_path, start_x, avatar_y, avatar_size)
         draw.text((text_x, 922), brand, font=brand_font, fill=(255, 255, 255, 235))
         draw.text((text_x, 962), subtitle, font=subtitle_font, fill=(125, 231, 255, 210))
         return
 
-    brand_x = (1080 - (brand_bbox[2] - brand_bbox[0])) / 2
-    subtitle_x = (1080 - (subtitle_bbox[2] - subtitle_bbox[0])) / 2
-    draw.text((brand_x, 918), brand, font=brand_font, fill=(255, 255, 255, 235))
-    draw.text((subtitle_x, 960), subtitle, font=subtitle_font, fill=(125, 231, 255, 210))
+    draw.text((72, 918), brand, font=brand_font, fill=(255, 255, 255, 235))
+    draw.text((72, 960), subtitle, font=subtitle_font, fill=(125, 231, 255, 210))
 
 
 def compose_instagram_image(background_path, release, content_text):
@@ -1722,9 +1767,18 @@ def compose_instagram_image(background_path, release, content_text):
         draw,
         (72, 260, 1008, 832),
         radius=40,
-        fill=(0, 0, 0, 72),
-        outline=(255, 255, 255, 34),
+        fill=(10, 20, 30, 70),
+        outline=(0, 180, 255, 54),
         width=1,
+    )
+    draw_glow_rectangle(draw, (72, 260, 1008, 832), radius=40, glow_color=(0, 180, 255, 42), layers=3)
+    draw_rounded_rectangle(
+        draw,
+        (72, 260, 1008, 832),
+        radius=40,
+        fill=(10, 20, 30, 180),
+        outline=(0, 180, 255, 120),
+        width=2,
     )
 
     if data["template"] == "BEFORE_AFTER":

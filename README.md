@@ -84,11 +84,11 @@ python daily_brief.py
 
 ## Radar Modes
 
-`RADAR_MODE=brief` sends a short release summary: headline, what changed, why it matters, real example, and link.
+`RADAR_MODE=brief` sends a short Top 3 ranking of releases with provider, title, score, link, and a recommendation.
 
 `RADAR_MODE=content` sends a publish-ready content pack: TikTok/Reel script, caption, 3 alternate hooks, comment question, final line, and link.
 
-The brief run selects the single release of the day and writes `selected_release.json`. The content run reuses that same file, so both messages are based on one shared insight.
+The brief run selects the Top 3 releases of the day and writes the #1 item to `selected_release.json`. The content run reuses that same #1 item, so the publish-ready version stays aligned with the top insight.
 
 ## Daily Schedule
 

@@ -409,6 +409,26 @@ def fake_test_articles():
             "source_kind": "official_rss",
         },
         {
+            "title": "Claude Code changelog adds faster coding tools for daily developer work.",
+            "link": "https://code.claude.com/docs/en/changelog/test-coding-tools",
+            "summary": "Official simulated Claude Code tooling release with new coding tools and better availability for builders.",
+            "source": "test_mode",
+            "domain": "code.claude.com",
+            "published_ts": now_ts,
+            "tier": "confirmed",
+            "source_kind": "official_rss",
+        },
+        {
+            "title": "Gemini API preview makes realtime audio easier for product teams.",
+            "link": "https://blog.google/products-and-platforms/products/gemini/test-realtime-audio",
+            "summary": "Official simulated Gemini API preview for realtime audio and multimodal product experiments.",
+            "source": "test_mode",
+            "domain": "blog.google",
+            "published_ts": now_ts,
+            "tier": "confirmed",
+            "source_kind": "official_rss",
+        },
+        {
             "title": "CEO predicts AGI will arrive soon.",
             "link": "https://example.com/ceo-predicts-agi",
             "summary": "Opinion and prediction without a concrete model release, API change, pricing update, or feature launch.",
@@ -454,21 +474,40 @@ def pick_best_article(articles):
     return best
 
 
+def get_top_releases(limit=3, articles=None):
+    if articles is None:
+        articles, _ = fetch_new_articles()
+
+    scored = []
+    for article in articles:
+        score = release_score(article)
+        if score >= MIN_RELEASE_SCORE:
+            scored.append({**article, "release_score": score})
+
+    return sorted(
+        scored,
+        key=lambda a: (a.get("release_score", 0), a.get("published_ts") or 0),
+        reverse=True,
+    )[:limit]
+
+
+def fetch_articles_for_selection():
+    if os.getenv("TEST_MODE") == "1":
+        articles = fake_test_articles()
+        new_seen = load_history()
+        print("TEST_MODE=1 activo. Usando artículos falsos.")
+        print_release_scores(articles)
+        return articles, new_seen
+
+    return fetch_new_articles()
+
+
 def get_top_release():
     """
     Seleccion unica del release del dia.
     brief selecciona y guarda selected_release.json.
     content reutiliza ese archivo para no elegir otro item del mismo changelog.
     """
-    if os.getenv("TEST_MODE") == "1":
-        articles = fake_test_articles()
-        new_seen = load_history()
-        print("TEST_MODE=1 activo. Usando artículos falsos.")
-        print_release_scores(articles)
-        best = pick_best_article(articles)
-        save_selected_release(best)
-        return best, new_seen
-
     if RADAR_MODE == "content":
         found, selected = load_selected_release()
         if not found:
@@ -478,10 +517,76 @@ def get_top_release():
         print("Reutilizando release seleccionado desde selected_release.json.")
         return selected, load_history()
 
-    articles, new_seen = fetch_new_articles()
-    best = pick_best_article(articles)
+    articles, new_seen = fetch_articles_for_selection()
+    top_releases = get_top_releases(limit=1, articles=articles)
+    best = top_releases[0] if top_releases else None
     save_selected_release(best)
     return best, new_seen
+
+
+def get_brief_releases():
+    articles, new_seen = fetch_articles_for_selection()
+    top_releases = get_top_releases(limit=3, articles=articles)
+    save_selected_release(top_releases[0] if top_releases else None)
+    return top_releases, new_seen
+
+
+def provider_name(article):
+    text = f"{article.get('title', '')} {article.get('summary', '')} {article.get('link', '')}".lower()
+    domain = (article.get("domain") or "").lower()
+
+    if "openai" in text or "chatgpt" in text or "gpt" in text or "sora" in text:
+        return "OpenAI"
+    if "anthropic" in text or "claude" in text or "code.claude.com" in text:
+        return "Anthropic"
+    if (
+        "gemini" in text
+        or "deepmind" in text
+        or "vertex ai" in text
+        or "blog.google" in domain
+        or "docs.cloud.google.com" in domain
+    ):
+        return "Google"
+    return domain or "Fuente oficial"
+
+
+def short_title(article, max_len=110):
+    title = (article.get("title") or "").replace("\n", " ").strip()
+    if len(title) <= max_len:
+        return title
+    return title[: max_len - 3].rstrip() + "..."
+
+
+def build_brief_top3(top_releases):
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    if not top_releases:
+        return (
+            "AI RELEASE RADAR TOP 3 (Rodri)\n"
+            f"FECHA: {today}\n\n"
+            "No hay lanzamientos relevantes nuevos hoy.\n"
+        )
+
+    lines = [
+        "AI RELEASE RADAR TOP 3 (Rodri)",
+        f"FECHA: {today}",
+        "",
+    ]
+
+    for i, article in enumerate(top_releases, start=1):
+        lines.append(
+            f"{i}. {provider_name(article)} - {short_title(article)} - "
+            f"SCORE {article.get('release_score')} - {article.get('link')}"
+        )
+
+    recommendation_index = 1
+    recommendation = (
+        f"Publica primero el #{recommendation_index} porque tiene el score mas alto "
+        "y es el release con mejor mezcla de fuente oficial, novedad e impacto practico."
+    )
+
+    lines.extend(["", "RECOMENDACION:", recommendation])
+    return "\n".join(lines)
 
 
 def build_prompt(today: str, best, mode: str):
@@ -639,8 +744,13 @@ def send_to_telegram(text: str):
 # Ejecución principal
 # -----------------------------
 if __name__ == "__main__":
-    best, new_seen = get_top_release()
-    msg = generate_signal(best)
+    if RADAR_MODE == "brief":
+        top_releases, new_seen = get_brief_releases()
+        msg = build_brief_top3(top_releases)
+    else:
+        best, new_seen = get_top_release()
+        msg = generate_signal(best)
+
     send_to_telegram(msg)
     save_history(new_seen)
     print("✅ AI Release Radar enviado a Telegram.")

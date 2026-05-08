@@ -845,7 +845,6 @@ def editorial_enrich(releases, max_candidates=8):
             by_id[item_id] = item
 
     enriched = []
-    skipped = []
     for idx, release in enumerate(pool):
         item = by_id.get(idx)
         if not item:
@@ -853,13 +852,16 @@ def editorial_enrich(releases, max_candidates=8):
             continue
 
         normalized = _normalize_editorial_item(item, release)
-        if normalized.get("skip_reason") and (normalized.get("editorial_score") or 0) < 40:
-            skipped.append((normalized.get("editorial_score"), normalized.get("skip_reason"), release.get("title")))
-            continue
+        # El editor puede flagear skip_reason como senal cualitativa, pero NO
+        # tiene poder de veto. Lo dejamos en el pool y que editorial_score lo
+        # mande al fondo si es flojo. Asi siempre entregamos un Top 3.
+        if normalized.get("skip_reason"):
+            print(
+                "editorial_enrich flag skip "
+                f"(score {normalized.get('editorial_score')}, "
+                f"{normalized.get('skip_reason')}): {release.get('title')}"
+            )
         enriched.append(normalized)
-
-    for score, reason, title in skipped:
-        print(f"editorial_enrich descarto release ({score}, {reason}): {title}")
 
     enriched.sort(
         key=lambda r: (
@@ -869,11 +871,6 @@ def editorial_enrich(releases, max_candidates=8):
         ),
         reverse=True,
     )
-
-    if not enriched:
-        # Si el editor descarto TODO, no forzamos contenido flojo:
-        # devolvemos lista vacia para que el caller muestre "no hay nada hoy".
-        return []
 
     return enriched
 
@@ -1756,40 +1753,43 @@ def _draw_brand_mark(image, draw):
     draw.text((text_x, text_y), text, font=brand_font, fill=(255, 255, 255, 240))
 
 
-def _draw_kicker(draw, today):
-    # Kicker editorial: linea pequena sobre el titular, tipo seccion de revista.
-    margin = 64
-    kicker_font = load_font(20, bold=True)
-    kicker = f"AI RELEASE RADAR · {today}"
-    # Sombra ligera.
-    draw.text((margin + 1, 990 + 1), kicker, font=kicker_font, fill=(0, 0, 0, 140))
-    draw.text((margin, 990), kicker, font=kicker_font, fill=(0, 220, 255, 240))
-
-
-def _draw_magazine_headline(draw, headline):
-    # Titular gigante, alineado a la izquierda, ocupando la zona inferior.
+def _draw_magazine_block(draw, headline, today):
+    # Bloque inferior estilo portada: kicker chico arriba, titular gigante debajo.
+    # Se ancla por la base; el bloque entero crece hacia arriba.
     margin = 64
     max_width = 1080 - 2 * margin
+    bottom_margin = 96
+    line_gap = 12
+    kicker_gap = 28
+
     title_font, title_lines = fit_wrapped_title(
         headline, max_width, max_lines=3, start_size=128, min_size=72
     )
 
-    line_metrics = []
-    total_height = 0
-    line_gap = 12
-    for line in title_lines:
-        bbox = draw.textbbox((0, 0), line, font=title_font)
-        line_height = bbox[3] - bbox[1]
-        line_metrics.append((line, line_height))
-        total_height += line_height + line_gap
-    total_height -= line_gap
+    # Medimos el titular usando alturas reales con descenders incluidos.
+    # textbbox con anchor 'la' devuelve el bbox completo; usamos getmetrics()
+    # para construir un line_height consistente y sin colisiones.
+    ascent, descent = title_font.getmetrics()
+    line_height = ascent + descent
 
-    bottom_margin = 96
-    # El kicker ocupa una linea ~32px sobre el headline; lo dejamos a y=990.
-    # El headline sube desde y = 1080 - bottom_margin hacia arriba.
+    total_height = len(title_lines) * line_height + max(0, len(title_lines) - 1) * line_gap
+
     title_y = 1080 - bottom_margin - total_height
 
-    for line, line_height in line_metrics:
+    # Kicker arriba del titular. Lo medimos para no chocar.
+    kicker_font = load_font(20, bold=True)
+    kicker = f"AI RELEASE RADAR · {today}"
+    k_ascent, k_descent = kicker_font.getmetrics()
+    kicker_height = k_ascent + k_descent
+    kicker_y = title_y - kicker_gap - kicker_height
+    if kicker_y < 64:
+        # Si el titular es muy alto, recortamos el gap antes de chocar con la marca.
+        kicker_y = max(64, title_y - 22 - kicker_height)
+
+    draw.text((margin + 1, kicker_y + 1), kicker, font=kicker_font, fill=(0, 0, 0, 150))
+    draw.text((margin, kicker_y), kicker, font=kicker_font, fill=(0, 220, 255, 240))
+
+    for line in title_lines:
         # Doble sombra: una desplazada para profundidad, otra base para contorno.
         draw.text((margin + 3, title_y + 4), line, font=title_font, fill=(0, 0, 0, 180))
         draw.text((margin, title_y), line, font=title_font, fill=(255, 255, 255, 252))
@@ -1816,8 +1816,7 @@ def compose_instagram_image(background_path, release, content_text):
     draw = ImageDraw.Draw(image, "RGBA")
 
     _draw_brand_mark(image, draw)
-    _draw_kicker(draw, today)
-    _draw_magazine_headline(draw, headline)
+    _draw_magazine_block(draw, headline, today)
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     image.convert("RGB").save(output_path, "PNG")

@@ -29,10 +29,14 @@ jobs:
         run: echo "date=$(date -u +%F)" >> "$GITHUB_OUTPUT"
 
       - name: Prepare selected release cache
+        # Key con run_id para que cada brief escriba su propio cache.
+        # Restore-keys deja que content tome el cache mas reciente del dia.
         uses: actions/cache@v4
         with:
           path: selected_release.json
-          key: selected-release-${{ steps.radar-date.outputs.date }}
+          key: selected-release-${{ steps.radar-date.outputs.date }}-${{ github.run_id }}
+          restore-keys: |
+            selected-release-${{ steps.radar-date.outputs.date }}-
 
       - name: Restore release history cache
         uses: actions/cache@v4

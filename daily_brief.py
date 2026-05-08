@@ -127,6 +127,9 @@ BRAND_AVATAR_PATH = os.path.join("assets", "brand", "rodrigo.png")
 RECENT_HOURS = 72  # solo tendencias recientes (3 dias)
 MIN_RELEASE_SCORE = 45
 
+APP_NAME = "NotiAgente Hered-IA"
+PERSONAL_BRAND = "Rodrigo Hered IA"
+
 def is_recent(published_ts, hours=RECENT_HOURS):
     if not published_ts:
         return False
@@ -1189,14 +1192,14 @@ def build_brief_top3(top_releases):
 
     if not top_releases:
         return (
-            "AI RELEASE RADAR TOP 3 (Rodri)\n"
+            f"{APP_NAME} · TOP 3\n"
             f"FECHA: {today}\n\n"
             "No hay lanzamientos que valga la pena publicar hoy.\n"
             "El editor descarto todo el pool por falta de angulo claro.\n"
         )
 
     lines = [
-        "AI RELEASE RADAR TOP 3 (Rodri)",
+        f"{APP_NAME} · TOP 3",
         f"FECHA: {today}",
         "",
     ]
@@ -1315,7 +1318,7 @@ Contexto del item elegido:
 {base_rules}
 
 Salida obligatoria. Usa exactamente este formato:
-AI RELEASE RADAR (Rodri)
+{APP_NAME}
 FECHA: {today}
 
 GUION TIKTOK/REEL 60s:
@@ -1347,7 +1350,7 @@ URL verificable.
 {base_rules}
 
 Salida obligatoria. Usa exactamente este formato:
-AI RELEASE RADAR (Rodri)
+{APP_NAME}
 FECHA: {today}
 
 TITULAR:
@@ -1384,7 +1387,7 @@ def generate_signal(best):
 
     if not best:
         return (
-            "AI RELEASE RADAR (Rodri)\n"
+            f"{APP_NAME}\n"
             f"FECHA: {today}\n\n"
             "No hay lanzamientos relevantes nuevos hoy.\n"
         )
@@ -1774,7 +1777,7 @@ def _draw_brand_mark(image, draw):
     margin = 64
     avatar_size = 56
     brand_font = load_font(22, bold=True)
-    text = "Rodrigo Hered IA"
+    text = PERSONAL_BRAND
     bbox = draw.textbbox((0, 0), text, font=brand_font)
     text_width = bbox[2] - bbox[0]
 
@@ -1819,7 +1822,7 @@ def _draw_magazine_block(draw, headline, today):
 
     # Kicker arriba del titular. Lo medimos para no chocar.
     kicker_font = load_font(20, bold=True)
-    kicker = f"AI RELEASE RADAR · {today}"
+    kicker = f"{APP_NAME} · {today}"
     k_ascent, k_descent = kicker_font.getmetrics()
     kicker_height = k_ascent + k_descent
     kicker_y = title_y - kicker_gap - kicker_height
@@ -1964,4 +1967,4 @@ if __name__ == "__main__":
                 print(f"No se pudo enviar la imagen por Telegram. Error: {exc}")
 
     save_history(new_seen)
-    print("✅ AI Release Radar enviado a Telegram.")
+    print(f"✅ {APP_NAME} enviado a Telegram.")

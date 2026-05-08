@@ -4,7 +4,7 @@ import re
 import base64
 import urllib.parse
 from urllib.parse import urlparse
-from datetime import datetime
+from datetime import datetime, timedelta
 import time
 
 import requests
@@ -121,6 +121,9 @@ HN_MIN_POINTS = 80  # filtro minimo de relevancia comunitaria
 
 HISTORY_FILE = f"history_{RADAR_MODE}.json"
 SELECTED_RELEASE_FILE = "selected_release.json"
+PUBLISHED_LOG_FILE = "published_log.json"
+PUBLISHED_LOG_LOOKBACK_DAYS = 7
+PUBLISHED_LOG_RETENTION_DAYS = 30
 INSTAGRAM_IMAGE_PATH = os.path.join("output", "instagram_release.png")
 BACKGROUND_IMAGE_PATH = os.path.join("output", "background.png")
 BRAND_AVATAR_PATH = os.path.join("assets", "brand", "rodrigo.png")
@@ -216,6 +219,79 @@ def save_selected_releases(releases):
     }
     with open(SELECTED_RELEASE_FILE, "w") as f:
         json.dump(payload, f, indent=2)
+
+
+# -----------------------------
+# Memoria editorial: que titulares fueron destacados los ultimos N dias.
+# El editor LLM la recibe para diversificar angulo y proveedor.
+# -----------------------------
+def load_published_log():
+    if not os.path.exists(PUBLISHED_LOG_FILE):
+        return []
+    try:
+        with open(PUBLISHED_LOG_FILE, "r") as f:
+            data = json.load(f)
+    except Exception:
+        return []
+    return data if isinstance(data, list) else []
+
+
+def save_published_log(entries):
+    with open(PUBLISHED_LOG_FILE, "w") as f:
+        json.dump(entries, f, indent=2)
+
+
+def append_to_published_log(top_releases):
+    if not top_releases:
+        return
+    log = load_published_log()
+    today = selection_date()
+    seen_links_today = {
+        entry.get("link") for entry in log if entry.get("date") == today
+    }
+
+    for release in top_releases:
+        link = release.get("link")
+        if not link or link in seen_links_today:
+            continue
+        headline = (release.get("headline_es") or "").strip()
+        if not headline:
+            headline = build_human_title(release)
+        log.append(
+            {
+                "date": today,
+                "headline": headline,
+                "provider": canonical_provider_name(provider_name(release)),
+                "link": link,
+            }
+        )
+        seen_links_today.add(link)
+
+    cutoff = (datetime.utcnow() - timedelta(days=PUBLISHED_LOG_RETENTION_DAYS)).strftime("%Y-%m-%d")
+    log = [entry for entry in log if (entry.get("date") or "") >= cutoff]
+    save_published_log(log)
+
+
+def recent_published_summaries(days=PUBLISHED_LOG_LOOKBACK_DAYS):
+    log = load_published_log()
+    if not log:
+        return []
+    cutoff = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+    summaries = []
+    for entry in log:
+        if (entry.get("date") or "") < cutoff:
+            continue
+        headline = (entry.get("headline") or "").strip()
+        if not headline:
+            continue
+        summaries.append(
+            {
+                "date": entry.get("date"),
+                "provider": entry.get("provider") or "",
+                "headline": headline,
+            }
+        )
+    return summaries
 
 
 # -----------------------------
@@ -724,6 +800,24 @@ def _editorial_prompt(candidates):
         candidate_lines.append(json.dumps(cand, ensure_ascii=False))
     candidates_block = "\n".join(candidate_lines)
 
+    recent = recent_published_summaries()
+    if recent:
+        recent_lines = [
+            f"  - [{entry['date']}] {entry['provider']}: {entry['headline']}"
+            for entry in recent[-30:]  # cap a los ultimos 30 titulares por seguridad
+        ]
+        memory_block = (
+            "Lanzamientos ya destacados los ultimos 7 dias "
+            "(NO repitas el mismo angulo ni el mismo proveedor seguido):\n"
+            + "\n".join(recent_lines)
+            + "\n\nDiversifica: si OpenAI ya salio ayer y antier, hoy prefiere "
+            "Anthropic o Google si tienen algo solido. Si el angulo de un "
+            "candidato suena igual a uno ya publicado, baja su editorial_score "
+            "salvo que aporte algo concretamente distinto."
+        )
+    else:
+        memory_block = "Sin historial reciente de publicaciones."
+
     return f"""
 Actuas como editor jefe de un canal de IA en espanol para LATAM.
 Audiencia: rectores, gerentes, emprendedores, builders y creators NO tecnicos.
@@ -765,8 +859,9 @@ Reglas duras:
 - No inventes datos, fechas, benchmarks, precios ni disponibilidad.
 - Si el input no lo dice, no lo digas.
 - Espanol natural, no traducido del ingles.
-- Elige la plantilla de diagrama que mas le conviene al release real,
-    no por defecto FLOW.
+
+Memoria editorial:
+{memory_block}
 
 Candidatos (JSON, uno por linea):
 {candidates_block}
@@ -944,6 +1039,7 @@ def get_top_release():
         enriched = editorial_enrich(pool)
         top_releases = enriched[:3]
         save_selected_releases(top_releases)
+        append_to_published_log(top_releases)
 
         choice_index = int(SELECT_CHOICE) - 1 if SELECT_CHOICE else 0
         selected = top_releases[choice_index] if choice_index < len(top_releases) else None
@@ -955,7 +1051,9 @@ def get_top_release():
     pool = _selection_pool(articles)
     enriched = editorial_enrich(pool)
     best = enriched[0] if enriched else None
-    save_selected_releases(enriched[:3])
+    top_releases = enriched[:3]
+    save_selected_releases(top_releases)
+    append_to_published_log(top_releases)
     return best, new_seen
 
 
@@ -967,6 +1065,7 @@ def get_brief_releases():
     top_releases = enriched[:3]
     print(f"brief: enriched={len(enriched)}, top3={len(top_releases)}")
     save_selected_releases(top_releases)
+    append_to_published_log(top_releases)
     return top_releases, new_seen
 
 
@@ -1006,184 +1105,55 @@ def provider_product_label(article):
     return f"{provider} / {product_label}" if product_label else provider
 
 
-def looks_like_version_title(title):
-    cleaned = title.strip().lower().lstrip("v")
-    if not cleaned:
-        return True
-    if len(cleaned) <= 12 and all(c.isdigit() or c in ".-" for c in cleaned):
-        return True
-    parts = cleaned.split()
-    return len(parts) == 1 and any(c.isdigit() for c in cleaned) and "." in cleaned
-
-
-def looks_like_date_title(title):
-    cleaned = title.strip()
-    return bool(
-        re.match(
-            r"^(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{1,2},\s+\d{4}$",
-            cleaned,
-            flags=re.IGNORECASE,
-        )
-    )
-
-
-def starts_with_raw_technical_text(title):
-    cleaned = title.strip()
-    technical_prefixes = ("/", "endpoint", "api endpoint", "the /")
-    lowered = cleaned.lower()
-    return lowered.startswith(technical_prefixes) or "/" in lowered[:35]
-
-
 def clean_summary_text(summary):
     text = re.sub(r"<[^>]+>", " ", summary or "")
     text = re.sub(r"\s+", " ", text.replace("\n", " ")).strip()
     return text
 
 
-def human_summary_fragment(summary):
-    text = clean_summary_text(summary)
-    replacements = [
-        (" for Claude Code", ""),
-        (" for Gemini API", ""),
-        (", and ", ", "),
-        (" and ", " y "),
-        ("Improves ", "mejora "),
-        ("Fixes ", "corrige "),
-        ("Adds ", "agrega "),
-        ("New ", "nuevo "),
-        ("remote login", "login remoto"),
-        ("project cleanup", "limpieza de proyectos"),
-        ("MCP gateways", "gateways MCP"),
-        ("gateways", "gateways"),
-        ("terminal rendering", "visualizacion de terminal"),
-        ("shell handling", "manejo de terminal"),
-        ("lower latency", "menor latencia"),
-        ("coding capabilities", "capacidades de programacion"),
-        ("realtime audio", "audio en tiempo real"),
-        ("generally available", "disponible de forma general"),
-        ("available", "disponible"),
-    ]
-    for old, new in replacements:
-        text = text.replace(old, new)
-    return text
+_DATE_TITLE_RE = re.compile(
+    r"^(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{1,2},\s+\d{4}$",
+    flags=re.IGNORECASE,
+)
 
 
-def title_is_descriptive(title):
-    if not title:
+def _is_descriptive_title(title):
+    # El titulo crudo del feed es publicable solo si parece una frase real.
+    # Rechaza versiones puras ("2.1.131"), fechas ("May 7, 2026") y strings
+    # dominados por slashes/endpoints.
+    cleaned = (title or "").strip()
+    if not cleaned or len(cleaned.split()) < 3:
         return False
-    if looks_like_version_title(title) or looks_like_date_title(title):
+    if _DATE_TITLE_RE.match(cleaned):
         return False
-    if starts_with_raw_technical_text(title):
+    bare = cleaned.lower().lstrip("v").replace(" ", "")
+    if bare and all(ch.isdigit() or ch in ".-" for ch in bare):
         return False
-    return len(title.split()) >= 3
+    if cleaned.startswith("/") or "/" in cleaned[:35]:
+        return False
+    return True
 
 
 def build_human_title(article, max_len=100):
-    # Si la capa editorial LLM ya redacto el titular, lo respetamos.
+    # Cuando la capa editorial LLM redacta titular, esa es la unica fuente
+    # de verdad. Solo caemos al fallback si el LLM fallo o no corrio.
     headline = (article.get("headline_es") or "").strip()
     if headline:
         if len(headline) <= max_len:
             return headline
         return headline[: max_len - 3].rstrip() + "..."
 
-    link = article.get("link") or ""
-    title = (article.get("title") or "").replace("\n", " ").strip()
-    summary = clean_summary_text(article.get("summary", ""))
-    raw_text = f"{title} {summary} {link}".lower()
-    provider = provider_name(article)
+    original = (article.get("title") or "").replace("\n", " ").strip()
+    if _is_descriptive_title(original):
+        if len(original) <= max_len:
+            return original
+        return original[: max_len - 3].rstrip() + "..."
+
+    provider = canonical_provider_name(provider_name(article))
     product = provider_product_label(article).split(" / ")[-1]
-
-    if product_key(article) == "claude_code" and "#2-1-126" in link:
-        return "Claude Code mejora login remoto, limpieza de proyectos y seleccion de modelos"
-    if "come to aws" in raw_text or "comes to aws" in raw_text or "to aws" in raw_text:
-        return "OpenAI lleva sus modelos y agentes a AWS"
-    if "deprecated" in raw_text:
-        return "Gemini elimina funciones antiguas de video y obliga a actualizar integraciones"
-    if "release notes" in raw_text:
-        return "Gemini actualiza capacidades en Vertex AI"
-    if provider == "OpenAI" and ("endpoint" in raw_text or "available" in raw_text or "availability" in raw_text):
-        return "OpenAI actualiza modelos disponibles para desarrolladores"
-
-    english_markers = [
-        "deprecated",
-        "release",
-        "endpoint",
-        "preview",
-        "available",
-        "update",
-        "updates",
-        "adds",
-        "improves",
-        "fixes",
-        "generally available",
-    ]
-    has_english_marker = any(marker in raw_text for marker in english_markers)
-
-    if title_is_descriptive(title) and not has_english_marker:
-        final_title = title
-    else:
-        summary = human_summary_fragment(summary)
-        if summary:
-            prefix = "" if summary.lower().startswith(product.lower()) else f"{product} "
-            final_title = f"{prefix}{summary}"
-        else:
-            final_title = f"{provider} actualiza {product} con cambios importantes"
-
-    noise_patterns = [
-        r"\bdeprecated\b",
-        r"\bpreview\b",
-        r"\bendpoints?\b",
-        r"\btable describes\b",
-        r"\bfollowing\b",
-        r"\brelease notes\b",
-        r"\bversion\s*\d+(?:\.\d+)*\b",
-        r"\bv?\d+(?:\.\d+){1,3}\b",
-    ]
-    for pattern in noise_patterns:
-        final_title = re.sub(pattern, " ", final_title, flags=re.IGNORECASE)
-
-    replacements = {
-        "Video generation": "funciones de video",
-        "video generation": "funciones de video",
-        "available": "disponible",
-        "Available": "disponible",
-        "generally disponible": "disponible de forma general",
-        "updates": "actualiza",
-        "Updates": "actualiza",
-        "update": "actualiza",
-        "Update": "actualiza",
-        "adds": "agrega",
-        "Adds": "agrega",
-        "improves": "mejora",
-        "Improves": "mejora",
-        "fixes": "corrige",
-        "Fixes": "corrige",
-        "models": "modelos",
-        "model": "modelo",
-        "managed agents": "agentes administrados",
-        "capabilities": "capacidades",
-        "availability": "disponibilidad",
-        "improvements": "mejoras",
-        "customers": "usuarios",
-        "developers": "desarrolladores",
-        "for ": "para ",
-        " and ": " y ",
-    }
-    for old, new in replacements.items():
-        final_title = final_title.replace(old, new)
-
-    final_title = re.sub(r"\s+", " ", final_title)
-    final_title = re.sub(r"^\W+", "", final_title).strip().rstrip(".")
-    if not title_is_descriptive(final_title):
-        final_title = f"{provider} actualiza {product} con cambios importantes"
-
-    if len(final_title) <= max_len:
-        return final_title
-    return final_title[: max_len - 3].rstrip() + "..."
-
-
-def human_title(article, max_len=110):
-    return build_human_title(article, max_len=max_len)
+    if not product or product == provider:
+        return f"{provider} estrena cambios"
+    return f"{provider} estrena cambios en {product}"
 
 
 def build_brief_top3(top_releases):

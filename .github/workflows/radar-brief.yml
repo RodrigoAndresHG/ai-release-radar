@@ -49,6 +49,15 @@ jobs:
             release-history-${{ steps.radar-date.outputs.date }}-
             release-history-
 
+      - name: Restore editorial memory (published log)
+        uses: actions/cache@v4
+        with:
+          path: published_log.json
+          key: published-log-${{ steps.radar-date.outputs.date }}-${{ github.run_id }}
+          restore-keys: |
+            published-log-${{ steps.radar-date.outputs.date }}-
+            published-log-
+
       - name: Install dependencies
         run: pip install -r requirements.txt
 

@@ -36,11 +36,13 @@ jobs:
         run: echo "date=$(date -u +%F)" >> "$GITHUB_OUTPUT"
 
       - name: Restore selected release cache
+        # No usamos fail-on-cache-miss: si no hay cache (p.ej. el Worker
+        # dispara content sin que el brief de hoy haya corrido), el script
+        # reconstruye el Top 3 al vuelo y entrega contenido igual.
         uses: actions/cache@v4
         with:
           path: selected_release.json
           key: selected-release-${{ steps.radar-date.outputs.date }}
-          fail-on-cache-miss: true
 
       - name: Restore release history cache
         uses: actions/cache@v4

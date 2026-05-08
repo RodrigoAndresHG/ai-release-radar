@@ -2,7 +2,6 @@ import os
 import json
 import re
 import base64
-import math
 import urllib.parse
 from urllib.parse import urlparse
 from datetime import datetime
@@ -124,7 +123,6 @@ HISTORY_FILE = f"history_{RADAR_MODE}.json"
 SELECTED_RELEASE_FILE = "selected_release.json"
 INSTAGRAM_IMAGE_PATH = os.path.join("output", "instagram_release.png")
 BACKGROUND_IMAGE_PATH = os.path.join("output", "background.png")
-LOGO_DIR = os.path.join("assets", "logos")
 BRAND_AVATAR_PATH = os.path.join("assets", "brand", "rodrigo.png")
 RECENT_HOURS = 72  # solo tendencias recientes (3 dias)
 MIN_RELEASE_SCORE = 45
@@ -699,11 +697,6 @@ def fetch_articles_for_selection():
 # Capa editorial LLM
 # -----------------------------
 EDITORIAL_MODEL = "gpt-5-mini"
-EDITORIAL_DIAGRAM_KEYS = {
-    "FLOW": ("node_1", "node_2", "node_3"),
-    "BEFORE_AFTER": ("before_label", "before_text", "after_label", "after_text"),
-    "ARCHITECTURE": ("top", "middle", "bottom"),
-}
 
 
 def _editorial_prompt(candidates):
@@ -732,14 +725,18 @@ Para CADA candidato, devuelves un objeto con:
 - hook: una linea (max 18 palabras) que explique por que importa para alguien NO tecnico.
     No repetir el titular. Sin jerga. Concreto.
 - image_title: 4-7 palabras para la imagen, en espanol, sin signos raros, sin emojis.
-- diagram: objeto con:
-    template: "FLOW" | "BEFORE_AFTER" | "ARCHITECTURE".
-    labels: dict con strings cortos (max 24 chars) para los nodos de esa plantilla.
-        FLOW         -> claves node_1, node_2, node_3
-        BEFORE_AFTER -> claves before_label, before_text, after_label, after_text
-        ARCHITECTURE -> claves top, middle, bottom
-    Las etiquetas DEBEN ser especificas del release, no genericas tipo
-    "Proveedor / Plataforma / Apps".
+- image_concept: descripcion visual EN INGLES (25-55 palabras) de UNA sola
+    imagen cinematografica conceptual del release. Estilo portada de revista
+    editorial (TIME, Wired, The Atlantic). Especifica:
+    - sujeto principal real y concreto (objeto, paisaje, escena conceptual);
+    - iluminacion (cinematic dramatic, blue hour, neon noir, golden hour, etc);
+    - paleta dominante (deep navy + amber, monochrome blue, etc);
+    - composicion (low angle, wide shot, close-up macro, aerial, etc).
+    Prohibido: robots, brains, neural nets, holograms, glowing AI orbs,
+    fantasy sci-fi, screens with code, stock photo aesthetic, generic tech.
+    Ejemplo: "A massive industrial transformer station at twilight, thick
+    power cables glowing electric blue, low-angle wide shot, deep navy
+    sky and amber rim light, photorealistic cinematic atmosphere".
 - skip_reason: null si vale la pena publicar, o un string corto si NO vale la pena
     (ej. "cambio cosmetico", "rumor sin fuente", "release de nicho dev puro").
     Solo si editorial_score < 40.
@@ -763,10 +760,7 @@ Responde SOLO con JSON valido en este shape exacto:
       "headline_es": "string",
       "hook": "string",
       "image_title": "string",
-      "diagram": {{
-        "template": "FLOW",
-        "labels": {{ "node_1": "...", "node_2": "...", "node_3": "..." }}
-      }},
+      "image_concept": "string en ingles 25-55 palabras",
       "skip_reason": null
     }}
   ]
@@ -775,22 +769,6 @@ Responde SOLO con JSON valido en este shape exacto:
 
 
 def _normalize_editorial_item(item, original):
-    template = (item.get("diagram") or {}).get("template")
-    template = template.upper() if isinstance(template, str) else None
-    if template not in EDITORIAL_DIAGRAM_KEYS:
-        template = None
-
-    diagram_overrides = {}
-    if template:
-        labels = (item.get("diagram") or {}).get("labels") or {}
-        for key in EDITORIAL_DIAGRAM_KEYS[template]:
-            value = labels.get(key)
-            if isinstance(value, str) and value.strip():
-                diagram_overrides[key] = value.strip()
-        if len(diagram_overrides) != len(EDITORIAL_DIAGRAM_KEYS[template]):
-            diagram_overrides = {}
-            template = None
-
     def _str(value):
         return value.strip() if isinstance(value, str) and value.strip() else None
 
@@ -803,8 +781,7 @@ def _normalize_editorial_item(item, original):
         "headline_es": _str(item.get("headline_es")),
         "hook": _str(item.get("hook")),
         "image_title": _str(item.get("image_title")),
-        "diagram_overrides": diagram_overrides or None,
-        "editorial_template": template,
+        "image_concept": _str(item.get("image_concept")),
         "editorial_score": score,
         "skip_reason": _str(item.get("skip_reason")),
     }
@@ -813,8 +790,8 @@ def _normalize_editorial_item(item, original):
 def editorial_enrich(releases, max_candidates=8):
     """
     Pasa el pool de releases por una capa editorial con gpt-5-mini.
-    Reordena por editorial_score y agrega titulares, hook, image_title y
-    diagram_overrides especificos del release.
+    Reordena por editorial_score y agrega headline_es, hook, image_title e
+    image_concept (descripcion visual cinematografica para gpt-image-1).
     Si la llamada falla o devuelve algo invalido, devuelve los releases
     originales sin tocar para que los fallbacks deterministas operen.
     """
@@ -1254,6 +1231,20 @@ def build_prompt(today: str, best, mode: str):
     if hook:
         context += f"ANGULO_EDITORIAL: {hook}\n"
 
+    editorial_lock = ""
+    if headline_es:
+        editorial_lock += (
+            f"\nIMPORTANTE: el TITULAR_EDITORIAL '{headline_es}' es la decision editorial "
+            "del dia. Tu guion DEBE girar alrededor de ese mensaje y reforzarlo. "
+            "Usa TITULO y RESUMEN solo como fuente de hechos (que salio, que hace, "
+            "por que importa), no como lead narrativo.\n"
+        )
+    if hook:
+        editorial_lock += (
+            f"El ANGULO_EDITORIAL '{hook}' es la promesa al lector. "
+            "El guion debe entregar ese angulo de forma clara.\n"
+        )
+
     base_rules = f"""
 Actua como un creador de contenido que explica lanzamientos reales de IA de forma simple y lista para grabar.
 Tu audiencia: rectores, gerentes, emprendedores, creators y builders no necesariamente tecnicos.
@@ -1276,7 +1267,7 @@ Reglas:
 - No hagas editorial estrategico ni predicciones.
 - No conviertas opiniones en noticia si no hay lanzamiento real.
 - No inventes datos, fechas, benchmarks, disponibilidad ni precios.
-
+{editorial_lock}
 Contexto del item elegido:
 {context}
 """
@@ -1436,52 +1427,6 @@ def build_short_image_title(release):
     return safe_image_text(title, max_chars=72, fallback=fallback)
 
 
-def image_template(release):
-    editorial = release.get("editorial_template")
-    if editorial in {"FLOW", "BEFORE_AFTER", "ARCHITECTURE"}:
-        return editorial
-
-    text = f"{release.get('title', '')} {release.get('summary', '')} {release.get('link', '')}".lower()
-
-    if _matches_any(
-        text,
-        [
-            "deprecated",
-            "deprecation",
-            "pricing",
-            "availability",
-            "available",
-            "lower latency",
-            "login",
-            "cleanup",
-            "fixes",
-            "improves",
-        ],
-    ):
-        return "BEFORE_AFTER"
-    if _matches_any(text, ["api", "sdk", "agents", "agent", "tools", "function calling", "vertex ai"]):
-        return "ARCHITECTURE"
-    return "FLOW"
-
-
-def image_template_instruction(template):
-    instructions = {
-        "FLOW": (
-            "Use the FLOW template only: three clean blocks in one horizontal sequence, "
-            "using node_1 -> node_2 -> node_3."
-        ),
-        "BEFORE_AFTER": (
-            "Use the BEFORE_AFTER template only: two clean columns labeled exactly "
-            "ANTES and DESPUÉS, with before_text -> after_text as the central comparison."
-        ),
-        "ARCHITECTURE": (
-            "Use the ARCHITECTURE template only: a vertical Top -> Middle -> Bottom "
-            "system structure using only the provided nodes."
-        ),
-    }
-    return instructions.get(template, instructions["FLOW"])
-
-
 def image_product_name(release):
     product = provider_product_label(release).split(" / ")[-1]
     canonical_products = {
@@ -1495,52 +1440,6 @@ def image_product_name(release):
         "DeepMind": "DeepMind",
     }
     return canonical_products.get(product, safe_image_text(product, max_chars=24, fallback="Producto IA"))
-
-
-def get_logo_path(provider, product):
-    text = f"{provider or ''} {product or ''}".lower()
-    candidates = []
-
-    if "aws" in text or "amazon" in text:
-        candidates.append("aws.png")
-    if "openai" in text or "chatgpt" in text or "gpt" in text:
-        candidates.append("openai.png")
-    if "claude" in text:
-        candidates.extend(["claude.png", "anthropic.png"])
-    if "anthropic" in text:
-        candidates.append("anthropic.png")
-    if "gemini" in text:
-        candidates.extend(["gemini.png", "google.png"])
-    if "google" in text or "vertex" in text or "deepmind" in text:
-        candidates.append("google.png")
-
-    for filename in candidates:
-        logo_path = os.path.join(LOGO_DIR, filename)
-        if os.path.exists(logo_path):
-            return logo_path
-    return None
-
-
-def draw_logo(base_image, logo_path, x, y, size):
-    if not logo_path or not os.path.exists(logo_path):
-        return
-
-    try:
-        from PIL import Image
-
-        with Image.open(logo_path) as logo:
-            logo = logo.convert("RGBA")
-            width, height = logo.size
-            if not width or not height:
-                return
-
-            scale = size / max(width, height)
-            resized = logo.resize((max(1, int(width * scale)), max(1, int(height * scale))), Image.LANCZOS)
-            paste_x = int(x + (size - resized.size[0]) / 2)
-            paste_y = int(y + (size - resized.size[1]) / 2)
-            base_image.alpha_composite(resized, (paste_x, paste_y))
-    except Exception as exc:
-        print(f"No se pudo dibujar logo local {logo_path}. Error: {exc}")
 
 
 def get_brand_avatar_path():
@@ -1584,101 +1483,44 @@ def draw_circular_avatar(image, path, x, y, size):
         return False
 
 
-def _platform_label_for(provider, product):
-    # Etiqueta del nodo intermedio. Evita repetir el provider en el nodo central.
-    if not product or product == provider:
-        if provider == "OpenAI":
-            return "Modelo"
-        if provider == "Anthropic":
-            return "Claude"
-        if provider == "Google":
-            return "Gemini"
-        return "Plataforma"
-    return product
-
-
-def build_diagram_texts(release, template):
-    # Si la capa editorial LLM ya decidio etiquetas, las usamos tal cual.
-    overrides = release.get("diagram_overrides") or {}
-    if overrides:
-        return {key: safe_image_text(value, max_chars=28, fallback=value) for key, value in overrides.items()}
-
-    raw_text = f"{release.get('title', '')} {release.get('summary', '')} {release.get('link', '')}".lower()
-    provider = canonical_provider_name(provider_name(release))
-    product = image_product_name(release)
-    platform = _platform_label_for(provider, product)
-
-    if template == "FLOW":
-        if "aws" in raw_text and provider == "OpenAI":
-            return {"node_1": "OpenAI", "node_2": "AWS", "node_3": "Apps"}
-        return {"node_1": provider, "node_2": platform, "node_3": "Apps"}
-
-    if template == "BEFORE_AFTER":
-        before = "Proceso manual"
-        after = "Sistema más simple"
-
-        if "claude code" in raw_text:
-            before = "Bloqueos remotos"
-            after = "Login y limpieza simple"
-        elif "deprecated" in raw_text or "deprecation" in raw_text:
-            before = "Endpoints antiguos"
-            after = "Integraciones actualizadas"
-        elif "pricing" in raw_text:
-            before = "Costo poco claro"
-            after = "Precio actualizado"
-        elif "availability" in raw_text or "available" in raw_text:
-            before = "Acceso limitado"
-            after = "Disponible para equipos"
-        elif "lower latency" in raw_text or "latency" in raw_text:
-            before = "Respuesta lenta"
-            after = "Respuesta más rápida"
-
-        return {
-            "before_label": "ANTES",
-            "after_label": "DESPUÉS",
-            "before_text": safe_image_text(before, fallback="Antes"),
-            "after_text": safe_image_text(after, fallback="Despues"),
-        }
-
-    if "aws" in raw_text and provider == "OpenAI":
-        nodes = ["OpenAI", "AWS", "Apps / Empresas"]
-    else:
-        nodes = [provider, platform, "Apps / Empresas"]
-
-    return {
-        "top": safe_image_text(nodes[0], max_chars=24, fallback="Proveedor"),
-        "middle": safe_image_text(nodes[1], max_chars=24, fallback="Plataforma"),
-        "bottom": safe_image_text(nodes[2], max_chars=24, fallback="Apps / Empresas"),
-    }
-
-
 def build_image_prompt(release, content_text):
-    # OpenAI Images genera exclusivamente fondo abstracto sin texto, formas UI ni cajas.
-    return """
-Create a 1080x1080 square abstract background image.
-This image will sit behind text and diagrams added later with Pillow,
-so it must remain a clean atmospheric background, not a composition.
+    # gpt-image-1 genera la imagen conceptual editorial de portada.
+    # El concepto especifico al release viene de la capa editorial LLM.
+    concept = (release.get("image_concept") or "").strip()
+    if not concept:
+        concept = (
+            "A cinematic wide shot of soft glowing connection lines flowing "
+            "through a deep navy space, dramatic single light source, premium "
+            "editorial atmosphere, photorealistic"
+        )
 
-Visual direction:
-- Deep navy to near-black base, slight cyan-blue highlight in one corner.
-- Soft cinematic gradient with a single subtle light source.
-- Faint particles or fine bokeh, very low contrast.
-- Optional: extremely subtle diagonal noise or film grain.
-- Premium editorial tech mood. Think Apple keynote backdrop, not infographic.
-- Visually empty in the center 60% so foreground text reads cleanly.
+    return f"""
+Create a 1080x1080 square cinematic editorial cover image.
+Style: premium magazine cover (TIME, Wired, The Atlantic). NOT infographic, NOT tech ad.
+
+SUBJECT (mandatory, follow exactly):
+{concept}
+
+Composition rules:
+- One clear hero subject. No collage, no split panels, no multi-subject layouts.
+- Strong cinematic lighting with a single dominant light source.
+- High contrast, dramatic atmosphere, deep shadows.
+- Lower 40% of the frame should be visually quieter / darker so overlaid
+    text remains readable. The hero subject sits in the upper-middle area.
+- Photorealistic OR painterly conceptual, NEVER cartoon or 3D render.
 
 Strict prohibitions:
-- No text, letters, words or numbers.
-- No logos, icons, brand marks or UI labels.
-- No rectangles, cards, panels, frames or boxes of any kind.
-- No diagrams, arrows, flow lines, nodes or connector lines.
-- No grids, blueprints, wireframes or schematics.
-- No screenshots, dashboards, charts or HUD elements.
-- No robots, brains, humanoids or characters.
-- No generic glowing AI orbs, neural nets or fantasy sci-fi art.
-- No stock photo aesthetic.
+- No text, letters, words, numbers, captions, watermarks anywhere.
+- No logos, icons, brand marks, UI labels, dashboards, screenshots.
+- No diagrams, arrows, flow lines, charts, schematics, wireframes.
+- No rectangles, cards, panels, frames, boxes, glass UI overlays.
+- No robots, humanoid AI, brains, neural nets, holograms, glowing AI orbs.
+- No fantasy sci-fi tropes, no spaceships, no aliens.
+- No stock photo aesthetic, no clipart, no generic tech.
+- No people's faces unless the concept explicitly demands them.
 
-The output must be an empty atmospheric backdrop, never a layout.
+The output must be a single cohesive cinematic image with a clear emotional
+mood, not a generic background.
 """.strip()
 
 
@@ -1777,100 +1619,54 @@ def build_short_text_title(text):
     return _trim_bad_title_ending(title)
 
 
-def draw_rounded_rectangle(draw, box, radius, fill, outline=None, width=1):
-    draw.rounded_rectangle(box, radius=radius, fill=fill, outline=outline, width=width)
-
-
-def draw_glow_rectangle(draw, box, radius, glow_color=(0, 180, 255, 60), layers=3):
-    x1, y1, x2, y2 = box
-    for layer in range(layers, 0, -1):
-        pad = layer * 5
-        alpha = max(16, glow_color[3] // layer)
-        draw.rounded_rectangle(
-            (x1 - pad, y1 - pad, x2 + pad, y2 + pad),
-            radius=radius + pad,
-            outline=(glow_color[0], glow_color[1], glow_color[2], alpha),
-            width=2,
-        )
-
-
-def draw_arrow(draw, start, end, fill=(0, 200, 255, 235), width=8):
-    shadow_start = (start[0] + 4, start[1] + 5)
-    shadow_end = (end[0] + 4, end[1] + 5)
-    draw.line([shadow_start, shadow_end], fill=(0, 0, 0, 115), width=width + 4)
-    draw.line([start, end], fill=fill, width=width)
-    angle = math.atan2(end[1] - start[1], end[0] - start[0])
-    arrow_len = 24
-    arrow_angle = math.pi / 7
-    shadow_points = [
-        shadow_end,
-        (
-            shadow_end[0] - arrow_len * math.cos(angle - arrow_angle),
-            shadow_end[1] - arrow_len * math.sin(angle - arrow_angle),
-        ),
-        (
-            shadow_end[0] - arrow_len * math.cos(angle + arrow_angle),
-            shadow_end[1] - arrow_len * math.sin(angle + arrow_angle),
-        ),
-    ]
-    draw.polygon(shadow_points, fill=(0, 0, 0, 115))
-    points = [
-        end,
-        (
-            end[0] - arrow_len * math.cos(angle - arrow_angle),
-            end[1] - arrow_len * math.sin(angle - arrow_angle),
-        ),
-        (
-            end[0] - arrow_len * math.cos(angle + arrow_angle),
-            end[1] - arrow_len * math.sin(angle + arrow_angle),
-        ),
-    ]
-    draw.polygon(points, fill=fill)
-
-
-def get_image_visual_data(release):
-    template = image_template(release)
-    provider = canonical_provider_name(provider_name(release))
-    product = image_product_name(release)
-    return {
-        "title": build_short_image_title(release),
-        "template": template,
-        "provider": provider,
-        "product": product,
-        "diagram_texts": build_diagram_texts(release, template),
-        "logo_path": get_logo_path(provider, product),
-        "brand": "Rodrigo Hered IA",
-    }
-
-
 def create_fallback_background(output_path=BACKGROUND_IMAGE_PATH):
+    # Fallback editorial cuando gpt-image-1 falla: gradiente cinematografico
+    # vertical sin diagramas, sin grid, sin lineas. Listo para titular grande.
     from PIL import Image, ImageDraw, ImageFilter
 
     width = height = 1080
-    image = Image.new("RGB", (width, height), "#05070a")
+    image = Image.new("RGB", (width, height), "#04060a")
     pixels = image.load()
+
     for y in range(height):
+        # Gradiente vertical: cobre/ambar arriba a la izquierda -> azul profundo abajo.
+        ty = y / height
+        r = int(28 * (1 - ty) ** 2)
+        g = int(20 + 8 * (1 - ty) ** 2)
+        b = int(36 + 18 * ty)
         for x in range(width):
-            glow = int(28 * (x / width) + 18 * (1 - y / height))
-            pixels[x, y] = (5, 7 + glow // 3, 10 + glow)
+            tx = x / width
+            # Vineta horizontal sutil para foco editorial.
+            edge = abs(tx - 0.5) * 2
+            edge_factor = 1 - 0.35 * (edge ** 2)
+            pixels[x, y] = (
+                max(0, int(r * edge_factor)),
+                max(0, int(g * edge_factor)),
+                max(0, int(b * edge_factor)),
+            )
 
-    draw = ImageDraw.Draw(image, "RGBA")
-    for pos in range(0, width, 54):
-        draw.line([(pos, 0), (pos, height)], fill=(100, 210, 255, 20), width=1)
-        draw.line([(0, pos), (width, pos)], fill=(100, 210, 255, 16), width=1)
+    # Highlight calido arriba a la izquierda, simulando luz cinematografica.
+    highlight = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    hl_draw = ImageDraw.Draw(highlight)
+    for radius, alpha in [(420, 90), (260, 120), (140, 150)]:
+        hl_draw.ellipse(
+            (180 - radius, 120 - radius, 180 + radius, 120 + radius),
+            fill=(220, 150, 90, alpha),
+        )
+    highlight = highlight.filter(ImageFilter.GaussianBlur(radius=80))
+    image = image.convert("RGBA")
+    image.alpha_composite(highlight)
 
-    draw.line([(170, 600), (910, 420)], fill=(80, 220, 255, 70), width=5)
-    draw.line([(250, 335), (780, 720)], fill=(120, 120, 255, 50), width=4)
-    for center, radius, color in [
-        ((250, 335), 120, (80, 220, 255, 45)),
-        ((785, 720), 150, (120, 120, 255, 42)),
-    ]:
-        x, y = center
-        draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=color)
+    # Sombra inferior progresiva (refuerza la zona del titular).
+    shadow = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    sh_draw = ImageDraw.Draw(shadow)
+    for y in range(int(height * 0.5), height):
+        t = (y - height * 0.5) / (height * 0.5)
+        sh_draw.line([(0, y), (width, y)], fill=(0, 0, 0, int(160 * t)))
+    image.alpha_composite(shadow)
 
-    image = image.filter(ImageFilter.GaussianBlur(radius=0.4))
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    image.save(output_path, "PNG")
+    image.convert("RGB").save(output_path, "PNG")
     return output_path
 
 
@@ -1885,7 +1681,7 @@ def generate_background_image(prompt):
             model="gpt-image-1",
             prompt=prompt,
             size="1024x1024",
-            quality="medium",
+            quality="high",
         )
 
         image_data = result.data[0]
@@ -1919,172 +1715,95 @@ def generate_background_image(prompt):
         return create_fallback_background(output_path)
 
 
-def _draw_centered_text(draw, text, center_x, y, font, fill, max_width, max_lines=1, line_gap=8):
-    lines = wrap_text(text, font, max_width, max_lines)
-    for line in lines:
-        bbox = draw.textbbox((0, 0), line, font=font)
-        line_width = bbox[2] - bbox[0]
-        draw.text((center_x - line_width / 2, y), line, font=font, fill=fill)
-        y += (bbox[3] - bbox[1]) + line_gap
-    return y
+def _draw_bottom_gradient(image):
+    # Oscurece progresivamente la mitad inferior para que el titular grande
+    # quede legible sobre cualquier imagen cinematografica.
+    from PIL import Image, ImageDraw
+
+    overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    overlay_draw = ImageDraw.Draw(overlay)
+    width, height = image.size
+    start_y = int(height * 0.42)
+    for y in range(start_y, height):
+        t = (y - start_y) / max(1, height - start_y)
+        alpha = int(min(235, 255 * (t ** 1.6)))
+        overlay_draw.line([(0, y), (width, y)], fill=(0, 0, 0, alpha))
+    return Image.alpha_composite(image, overlay)
 
 
-def logo_for_label(data, label):
-    label = label or ""
-    if label.lower() in {"apps", "apps / empresas", "aplicación", "aplicacion"}:
-        return None
-    return get_logo_path(label, label)
+def _draw_brand_mark(image, draw):
+    # Marca personal compacta, esquina superior derecha, estilo editorial.
+    margin = 64
+    avatar_size = 56
+    brand_font = load_font(22, bold=True)
+    text = "Rodrigo Hered IA"
+    bbox = draw.textbbox((0, 0), text, font=brand_font)
+    text_width = bbox[2] - bbox[0]
 
-
-def _draw_card(base_image, draw, box, text, font, fill=(255, 255, 255, 245), logo_path=None):
-    draw_glow_rectangle(draw, box, radius=28, glow_color=(0, 180, 255, 46), layers=2)
-    draw_rounded_rectangle(
-        draw,
-        box,
-        radius=28,
-        fill=(10, 20, 30, 190),
-        outline=(0, 180, 255, 120),
-        width=2,
-    )
-    x1, y1, x2, y2 = box
-    if logo_path:
-        draw_logo(base_image, logo_path, x1 + (x2 - x1 - 42) / 2, y1 + 22, 42)
-        text_y_offset = 76
-    else:
-        text_y_offset = 0
-
-    text_lines = wrap_text(text, font, max_width=(x2 - x1 - 44), max_lines=2)
-    total_height = len(text_lines) * 30 + (len(text_lines) - 1) * 8
-    available_top = y1 + text_y_offset
-    text_y = available_top + ((y2 - available_top) - total_height) / 2 - 2
-    for line in text_lines:
-        bbox = draw.textbbox((0, 0), line, font=font)
-        draw.text((x1 + (x2 - x1 - (bbox[2] - bbox[0])) / 2, text_y), line, font=font, fill=fill)
-        text_y += 38
-
-
-def _compose_flow(base_image, draw, data, fonts):
-    texts = data["diagram_texts"]
-    y = 440
-    w = 250
-    h = 132
-    gap = 68
-    x = 72
-    boxes = [
-        (x, y, x + w, y + h),
-        (x + w + gap, y, x + 2 * w + gap, y + h),
-        (x + 2 * (w + gap), y, x + 3 * w + 2 * gap, y + h),
-    ]
-    labels = [texts["node_1"], texts["node_2"], texts["node_3"]]
-    for box, label in zip(boxes, labels):
-        _draw_card(base_image, draw, box, label, fonts["diagram"], logo_path=logo_for_label(data, label))
-    draw_arrow(draw, (boxes[0][2] + 12, y + h / 2), (boxes[1][0] - 12, y + h / 2))
-    draw_arrow(draw, (boxes[1][2] + 12, y + h / 2), (boxes[2][0] - 12, y + h / 2))
-
-
-def _compose_before_after(base_image, draw, data, fonts):
-    texts = data["diagram_texts"]
-    left = (92, 365, 496, 675)
-    right = (584, 365, 988, 675)
-    label_font = fonts["small_bold"]
-    draw_logo(base_image, data.get("logo_path"), 508, 300, 64)
-
-    for box, label, body in [
-        (left, texts["before_label"], texts["before_text"]),
-        (right, texts["after_label"], texts["after_text"]),
-    ]:
-        is_after = label == texts["after_label"]
-        if is_after:
-            draw_glow_rectangle(draw, box, radius=34, glow_color=(0, 200, 255, 72), layers=3)
-        draw_rounded_rectangle(
-            draw,
-            box,
-            radius=34,
-            fill=(10, 20, 30, 190),
-            outline=(0, 180, 255, 120 if is_after else 82),
-            width=2,
-        )
-        x1, y1, x2, _ = box
-        label_fill = (0, 200, 255, 238) if is_after else (180, 180, 180, 230)
-        body_fill = (255, 255, 255, 248) if is_after else (180, 180, 180, 235)
-        if is_after:
-            _draw_centered_text(draw, body, (x1 + x2) / 2 + 2, y1 + 140, fonts["diagram"], (0, 200, 255, 90), x2 - x1 - 64, 2)
-        draw.text((x1 + 34, y1 + 34), label, font=label_font, fill=label_fill)
-        _draw_centered_text(draw, body, (x1 + x2) / 2, y1 + 138, fonts["diagram"], body_fill, x2 - x1 - 64, 2)
-
-    draw_arrow(draw, (512, 520), (568, 520), fill=(0, 200, 255, 240), width=9)
-
-
-def _compose_architecture(base_image, draw, data, fonts):
-    texts = data["diagram_texts"]
-    boxes = [
-        (300, 308, 780, 418, texts["top"]),
-        (250, 478, 830, 598, texts["middle"]),
-        (210, 668, 870, 792, texts["bottom"]),
-    ]
-    for index, (x1, y1, x2, y2, label) in enumerate(boxes):
-        is_after = index == len(boxes) - 1
-        if is_after:
-            draw_glow_rectangle(draw, (x1, y1, x2, y2), radius=30, glow_color=(0, 200, 255, 58), layers=3)
-        fill = (10, 20, 30, 198) if index == 1 else (10, 20, 30, 182)
-        draw_rounded_rectangle(
-            draw,
-            (x1, y1, x2, y2),
-            radius=30,
-            fill=fill,
-            outline=(0, 180, 255, 120 if is_after else 88),
-            width=2,
-        )
-        logo_path = logo_for_label(data, label)
-        if logo_path:
-            draw_logo(base_image, logo_path, x1 + 26, y1 + 28, 54)
-            text_center = (x1 + x2) / 2 + 18
-            max_width = x2 - x1 - 120
-        else:
-            text_center = (x1 + x2) / 2
-            max_width = x2 - x1 - 64
-        text_fill = (255, 255, 255, 248) if is_after else (220, 224, 228, 238)
-        _draw_centered_text(draw, label, text_center, y1 + 36, fonts["diagram"], text_fill, max_width, 1)
-
-    draw_arrow(draw, (540, 432), (540, 462), fill=(0, 200, 255, 235), width=8)
-    draw_arrow(draw, (540, 612), (540, 652), fill=(0, 200, 255, 235), width=8)
-
-
-def draw_brand_footer(image, draw, brand, fonts):
-    subtitle = "AI Builder / CIO"
     avatar_path = get_brand_avatar_path()
-    avatar_size = 72
-    gap = 18
-    brand_font = fonts["brand"]
-    subtitle_font = fonts["brand_subtitle"]
-
-    brand_bbox = draw.textbbox((0, 0), brand, font=brand_font)
-    subtitle_bbox = draw.textbbox((0, 0), subtitle, font=subtitle_font)
-    text_width = max(brand_bbox[2] - brand_bbox[0], subtitle_bbox[2] - subtitle_bbox[0])
-
     if avatar_path:
-        start_x = 72
-        avatar_y = 922
-        text_x = start_x + avatar_size + gap
-        draw.ellipse(
-            (start_x - 10, avatar_y - 8, start_x + avatar_size + 12, avatar_y + avatar_size + 14),
-            fill=(0, 0, 0, 90),
-        )
-        draw_circular_avatar(image, avatar_path, start_x, avatar_y, avatar_size)
-        draw.text((text_x, 922), brand, font=brand_font, fill=(255, 255, 255, 235))
-        draw.text((text_x, 962), subtitle, font=subtitle_font, fill=(125, 231, 255, 210))
-        return
+        avatar_x = 1080 - margin - avatar_size
+        avatar_y = margin
+        draw_circular_avatar(image, avatar_path, avatar_x, avatar_y, avatar_size)
+        text_x = 1080 - margin - text_width
+        text_y = avatar_y + avatar_size + 12
+    else:
+        text_x = 1080 - margin - text_width
+        text_y = margin
 
-    draw.text((72, 918), brand, font=brand_font, fill=(255, 255, 255, 235))
-    draw.text((72, 960), subtitle, font=subtitle_font, fill=(125, 231, 255, 210))
+    # Sombra suave para legibilidad sobre fondos brillantes.
+    draw.text((text_x + 1, text_y + 2), text, font=brand_font, fill=(0, 0, 0, 160))
+    draw.text((text_x, text_y), text, font=brand_font, fill=(255, 255, 255, 240))
+
+
+def _draw_kicker(draw, today):
+    # Kicker editorial: linea pequena sobre el titular, tipo seccion de revista.
+    margin = 64
+    kicker_font = load_font(20, bold=True)
+    kicker = f"AI RELEASE RADAR · {today}"
+    # Sombra ligera.
+    draw.text((margin + 1, 990 + 1), kicker, font=kicker_font, fill=(0, 0, 0, 140))
+    draw.text((margin, 990), kicker, font=kicker_font, fill=(0, 220, 255, 240))
+
+
+def _draw_magazine_headline(draw, headline):
+    # Titular gigante, alineado a la izquierda, ocupando la zona inferior.
+    margin = 64
+    max_width = 1080 - 2 * margin
+    title_font, title_lines = fit_wrapped_title(
+        headline, max_width, max_lines=3, start_size=128, min_size=72
+    )
+
+    line_metrics = []
+    total_height = 0
+    line_gap = 12
+    for line in title_lines:
+        bbox = draw.textbbox((0, 0), line, font=title_font)
+        line_height = bbox[3] - bbox[1]
+        line_metrics.append((line, line_height))
+        total_height += line_height + line_gap
+    total_height -= line_gap
+
+    bottom_margin = 96
+    # El kicker ocupa una linea ~32px sobre el headline; lo dejamos a y=990.
+    # El headline sube desde y = 1080 - bottom_margin hacia arriba.
+    title_y = 1080 - bottom_margin - total_height
+
+    for line, line_height in line_metrics:
+        # Doble sombra: una desplazada para profundidad, otra base para contorno.
+        draw.text((margin + 3, title_y + 4), line, font=title_font, fill=(0, 0, 0, 180))
+        draw.text((margin, title_y), line, font=title_font, fill=(255, 255, 255, 252))
+        title_y += line_height + line_gap
 
 
 def compose_instagram_image(background_path, release, content_text):
-    # Pillow escribe todo el texto exacto, diagramas, logos y branding final.
+    # Layout magazine cover: imagen full-bleed + gradient inferior + titular gigante
+    # alineado a la izquierda + marca personal en esquina superior derecha.
     from PIL import Image, ImageDraw
 
     output_path = INSTAGRAM_IMAGE_PATH
-    data = get_image_visual_data(release)
+    headline = build_short_image_title(release)
+    today = datetime.now().strftime("%Y-%m-%d")
 
     try:
         background = Image.open(background_path).convert("RGB").resize((1080, 1080), Image.LANCZOS)
@@ -2093,55 +1812,15 @@ def compose_instagram_image(background_path, release, content_text):
         background = Image.open(background_path).convert("RGB").resize((1080, 1080), Image.LANCZOS)
 
     image = background.convert("RGBA")
-    overlay = Image.new("RGBA", image.size, (0, 0, 0, 118))
-    image = Image.alpha_composite(image, overlay)
+    image = _draw_bottom_gradient(image)
     draw = ImageDraw.Draw(image, "RGBA")
 
-    fonts = {
-        "diagram": load_font(30, bold=True),
-        "small_bold": load_font(24, bold=True),
-        "brand": load_font(34, bold=True),
-        "brand_subtitle": load_font(20, bold=False),
-    }
-
-    margin = 72
-    title_font, title_lines = fit_wrapped_title(data["title"], 1080 - 2 * margin, max_lines=2)
-    title_y = 72
-    for line in title_lines:
-        bbox = draw.textbbox((0, 0), line, font=title_font)
-        draw.text((margin, title_y), line, font=title_font, fill=(255, 255, 255, 248))
-        title_y += (bbox[3] - bbox[1]) + 14
-
-    draw_rounded_rectangle(
-        draw,
-        (72, 260, 1008, 832),
-        radius=40,
-        fill=(10, 20, 30, 70),
-        outline=(0, 180, 255, 54),
-        width=1,
-    )
-    draw_glow_rectangle(draw, (72, 260, 1008, 832), radius=40, glow_color=(0, 180, 255, 42), layers=3)
-    draw_rounded_rectangle(
-        draw,
-        (72, 260, 1008, 832),
-        radius=40,
-        fill=(10, 20, 30, 180),
-        outline=(0, 180, 255, 120),
-        width=2,
-    )
-
-    if data["template"] == "BEFORE_AFTER":
-        _compose_before_after(image, draw, data, fonts)
-    elif data["template"] == "ARCHITECTURE":
-        _compose_architecture(image, draw, data, fonts)
-    else:
-        _compose_flow(image, draw, data, fonts)
-
-    draw_brand_footer(image, draw, data["brand"], fonts)
+    _draw_brand_mark(image, draw)
+    _draw_kicker(draw, today)
+    _draw_magazine_headline(draw, headline)
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     image.convert("RGB").save(output_path, "PNG")
-
     return output_path
 
 

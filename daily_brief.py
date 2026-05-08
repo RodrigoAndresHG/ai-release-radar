@@ -743,7 +743,6 @@ Para CADA candidato, devuelves un objeto con:
     Suena como algo que un creador diria en voz alta.
 - hook: una linea (max 18 palabras) que explique por que importa para alguien NO tecnico.
     No repetir el titular. Sin jerga. Concreto.
-- image_title: 4-7 palabras para la imagen, en espanol, sin signos raros, sin emojis.
 - image_concept: descripcion visual EN INGLES (25-55 palabras) de UNA sola
     imagen cinematografica conceptual del release. Estilo portada de revista
     editorial (TIME, Wired, The Atlantic). Especifica:
@@ -756,6 +755,8 @@ Para CADA candidato, devuelves un objeto con:
     Ejemplo: "A massive industrial transformer station at twilight, thick
     power cables glowing electric blue, low-angle wide shot, deep navy
     sky and amber rim light, photorealistic cinematic atmosphere".
+    NOTA: el titular de la portada se toma de headline_es. NO repitas la
+    descripcion visual como si fuera un titular.
 - skip_reason: null si vale la pena publicar, o un string corto si NO vale la pena
     (ej. "cambio cosmetico", "rumor sin fuente", "release de nicho dev puro").
     Solo si editorial_score < 40.
@@ -778,7 +779,6 @@ Responde SOLO con JSON valido en este shape exacto:
       "editorial_score": int,
       "headline_es": "string",
       "hook": "string",
-      "image_title": "string",
       "image_concept": "string en ingles 25-55 palabras",
       "skip_reason": null
     }}
@@ -799,7 +799,6 @@ def _normalize_editorial_item(item, original):
         **original,
         "headline_es": _str(item.get("headline_es")),
         "hook": _str(item.get("hook")),
-        "image_title": _str(item.get("image_title")),
         "image_concept": _str(item.get("image_concept")),
         "editorial_score": score,
         "skip_reason": _str(item.get("skip_reason")),
@@ -809,8 +808,8 @@ def _normalize_editorial_item(item, original):
 def editorial_enrich(releases, max_candidates=8):
     """
     Pasa el pool de releases por una capa editorial con gpt-5-mini.
-    Reordena por editorial_score y agrega headline_es, hook, image_title e
-    image_concept (descripcion visual cinematografica para gpt-image-1).
+    Reordena por editorial_score y agrega headline_es, hook e image_concept
+    (descripcion visual cinematografica para gpt-image-1).
     Si la llamada falla o devuelve algo invalido, devuelve los releases
     originales sin tocar para que los fallbacks deterministas operen.
     """
@@ -1461,18 +1460,14 @@ def _trim_bad_title_ending(title):
 
 
 def build_short_image_title(release):
-    # Fallback deterministico: el titular humano del release, limpio para la imagen.
-    # La capa editorial LLM puede sobreescribir esto via release["image_title"].
-    override = (release.get("image_title") or "").strip()
-    if override:
-        return safe_image_text(override, max_chars=72, fallback=override)
-
+    # El titular de la portada usa el mismo headline_es del brief (via human_title).
+    # Una sola fuente de verdad evita que el LLM mezcle campos.
     product = image_product_name(release)
     provider = canonical_provider_name(provider_name(release))
-    title = compact_image_title(release, max_chars=64)
+    title = compact_image_title(release, max_chars=72)
     title = _trim_bad_title_ending(title)
     fallback = f"{provider} estrena cambios en {product}" if product != provider else f"{provider} estrena cambios"
-    return safe_image_text(title, max_chars=72, fallback=fallback)
+    return safe_image_text(title, max_chars=80, fallback=fallback)
 
 
 def image_product_name(release):

@@ -484,8 +484,7 @@ def release_score(article):
 # -----------------------------
 # Obtener artículos (oficial -> fallback)
 # -----------------------------
-def fetch_new_articles():
-    seen_links = load_history()
+def _fetch_articles_with_filter(seen_links):
     new_seen = set(seen_links)
     articles = []
 
@@ -520,6 +519,23 @@ def fetch_new_articles():
             url = google_news_rss(keyword)
             for article in parse_feed(url, limit=10):
                 _add(article, "google_news_rss")
+
+    return articles, new_seen
+
+
+def fetch_new_articles():
+    seen_links = load_history()
+    articles, new_seen = _fetch_articles_with_filter(seen_links)
+
+    # Si el filtro de history se comio todo (multiples runs en el mismo dia,
+    # ventana lenta, etc.), reintentamos sin history para que el dia no
+    # quede sin contenido. La capa editorial sigue rankeando calidad.
+    if not articles:
+        print(
+            "fetch_new_articles: pool vacio con history. "
+            "Reintentando sin history filter."
+        )
+        articles, _ = _fetch_articles_with_filter(set())
 
     return articles, new_seen
 

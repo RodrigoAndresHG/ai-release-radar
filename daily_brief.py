@@ -97,6 +97,29 @@ KEYWORDS = [
     "DeepMind new model",
 ]
 
+# Fuentes editoriales: cubren lanzamientos virales y cobertura curada
+# que no aparece en RSS oficiales.
+EDITORIAL_RSS_SOURCES = [
+    # TechCrunch tag IA: cobertura editorial diaria.
+    "https://techcrunch.com/category/artificial-intelligence/feed/",
+    # The Verge AI: cobertura editorial de producto.
+    "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml",
+    # MIT Technology Review IA.
+    "https://www.technologyreview.com/topic/artificial-intelligence/feed",
+]
+
+# Hacker News (Algolia): captura lanzamientos comentados el mismo dia.
+HN_KEYWORDS = [
+    "OpenAI",
+    "Anthropic",
+    "Claude",
+    "Gemini",
+    "DeepMind",
+    "GPT",
+    "Sora",
+]
+HN_MIN_POINTS = 80  # filtro minimo de relevancia comunitaria
+
 HISTORY_FILE = f"history_{RADAR_MODE}.json"
 SELECTED_RELEASE_FILE = "selected_release.json"
 INSTAGRAM_IMAGE_PATH = os.path.join("output", "instagram_release.png")
@@ -234,6 +257,59 @@ def google_news_rss(query: str):
     q = urllib.parse.quote(query)
     # Español LATAM + Ecuador
     return f"https://news.google.com/rss/search?q={q}&hl=es-419&gl=EC&ceid=EC:es-419"
+
+
+def fetch_hacker_news(keywords, min_points=HN_MIN_POINTS, hours=RECENT_HOURS):
+    """
+    Pesca posts comentados de HN via Algolia (gratis, sin auth).
+    Filtra por puntos minimos para evitar ruido y por ventana de recencia.
+    """
+    items = []
+    seen_urls = set()
+    cutoff_ts = int(time.time()) - hours * 3600
+
+    for keyword in keywords:
+        params = {
+            "query": keyword,
+            "tags": "story",
+            "numericFilters": f"points>={min_points},created_at_i>{cutoff_ts}",
+            "hitsPerPage": 20,
+        }
+        try:
+            response = requests.get(
+                "https://hn.algolia.com/api/v1/search_by_date",
+                params=params,
+                timeout=15,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except Exception as exc:
+            print(f"HN fetch fallo para '{keyword}': {exc}")
+            continue
+
+        for hit in payload.get("hits", []):
+            url = hit.get("url") or f"https://news.ycombinator.com/item?id={hit.get('objectID')}"
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+
+            title = (hit.get("title") or "").strip()
+            if not title:
+                continue
+
+            domain = urlparse(url).netloc
+            items.append(
+                {
+                    "title": title,
+                    "link": url,
+                    "summary": f"Hacker News: {hit.get('points', 0)} puntos, {hit.get('num_comments', 0)} comentarios.",
+                    "source": "hn_algolia",
+                    "domain": domain,
+                    "published_ts": hit.get("created_at_i"),
+                }
+            )
+
+    return items
 
 
 def _matches_any(text, terms):
@@ -375,6 +451,10 @@ def release_score(article):
         score += 20
     if source_kind == "official_rss":
         score += 10
+    elif source_kind == "editorial_rss":
+        score += 8  # TechCrunch/Verge/MIT TR: cobertura editorial curada
+    elif source_kind == "hacker_news":
+        score += 5  # senal de atencion comunitaria, no curacion editorial
     elif source_kind == "google_news_rss":
         score -= 8
 
@@ -411,30 +491,37 @@ def fetch_new_articles():
     new_seen = set(seen_links)
     articles = []
 
+    def _add(article, source_kind):
+        if not article.get("link") or article["link"] in new_seen:
+            return
+        if not is_recent(article.get("published_ts")):
+            return
+        tier = "confirmed" if article.get("domain") in OFFICIAL_DOMAINS else "trend"
+        articles.append({**article, "tier": tier, "source_kind": source_kind})
+        new_seen.add(article["link"])
+
     # 1) Fuentes oficiales primero
     for url in OFFICIAL_SOURCES:
-        for a in parse_feed(url, limit=15):
-            if not a.get("link") or a["link"] in seen_links:
-                continue
+        for article in parse_feed(url, limit=15):
+            _add(article, "official_rss")
 
-            tier = "confirmed" if a.get("domain") in OFFICIAL_DOMAINS else "trend"
-            articles.append({**a, "tier": tier, "source_kind": "official_rss"})
-            new_seen.add(a["link"])
+    # 2) Fuentes editoriales (TechCrunch, Verge, MIT TR): captura lanzamientos
+    #    cubiertos editorialmente que no aparecen en changelogs oficiales.
+    for url in EDITORIAL_RSS_SOURCES:
+        for article in parse_feed(url, limit=15):
+            _add(article, "editorial_rss")
 
-    # 2) Fallback Google News si no hay nada o si lo oficial no llega al umbral.
-    if not articles or max(release_score(a) for a in articles) < MIN_RELEASE_SCORE:
-        for kw in KEYWORDS:
-            url = google_news_rss(kw)
-            for a in parse_feed(url, limit=10):
-                if not a.get("link") or a["link"] in seen_links:
-                    continue
+    # 3) Hacker News: captura lanzamientos virales el mismo dia.
+    for article in fetch_hacker_news(HN_KEYWORDS):
+        _add(article, "hacker_news")
 
-                if not is_recent(a.get("published_ts")):
-                    continue
-
-                tier = "confirmed" if a.get("domain") in OFFICIAL_DOMAINS else "trend"
-                articles.append({**a, "tier": tier, "source_kind": "google_news_rss"})
-                new_seen.add(a["link"])
+    # 4) Fallback Google News si no hay nada o nada llega al umbral.
+    qualifying = [release_score(a) for a in articles]
+    if not qualifying or max(qualifying) < MIN_RELEASE_SCORE:
+        for keyword in KEYWORDS:
+            url = google_news_rss(keyword)
+            for article in parse_feed(url, limit=10):
+                _add(article, "google_news_rss")
 
     return articles, new_seen
 
@@ -608,6 +695,221 @@ def fetch_articles_for_selection():
     return fetch_new_articles()
 
 
+# -----------------------------
+# Capa editorial LLM
+# -----------------------------
+EDITORIAL_MODEL = "gpt-5-mini"
+EDITORIAL_DIAGRAM_KEYS = {
+    "FLOW": ("node_1", "node_2", "node_3"),
+    "BEFORE_AFTER": ("before_label", "before_text", "after_label", "after_text"),
+    "ARCHITECTURE": ("top", "middle", "bottom"),
+}
+
+
+def _editorial_prompt(candidates):
+    candidate_lines = []
+    for cand in candidates:
+        candidate_lines.append(json.dumps(cand, ensure_ascii=False))
+    candidates_block = "\n".join(candidate_lines)
+
+    return f"""
+Actuas como editor jefe de un canal de IA en espanol para LATAM.
+Audiencia: rectores, gerentes, emprendedores, builders y creators NO tecnicos.
+Tu trabajo es decidir cual lanzamiento merece publicacion hoy y como contarlo.
+
+Recibes una lista de candidatos detectados por un radar de releases.
+Para CADA candidato, devuelves un objeto con:
+
+- id: el mismo id que recibiste.
+- editorial_score: 0-100. Criterio:
+    80-100 = lanzamiento real, novedad clara, accionable o con impacto inmediato para no tecnicos.
+    50-79  = cambio relevante pero incremental.
+    0-49   = cosmetico, niche, sin angulo claro.
+- headline_es: titular humano en espanol natural, 8-14 palabras.
+    No Spanglish. No traduccion literal. No numeros de version.
+    No frases tipo "actualiza con cambios importantes".
+    Suena como algo que un creador diria en voz alta.
+- hook: una linea (max 18 palabras) que explique por que importa para alguien NO tecnico.
+    No repetir el titular. Sin jerga. Concreto.
+- image_title: 4-7 palabras para la imagen, en espanol, sin signos raros, sin emojis.
+- diagram: objeto con:
+    template: "FLOW" | "BEFORE_AFTER" | "ARCHITECTURE".
+    labels: dict con strings cortos (max 24 chars) para los nodos de esa plantilla.
+        FLOW         -> claves node_1, node_2, node_3
+        BEFORE_AFTER -> claves before_label, before_text, after_label, after_text
+        ARCHITECTURE -> claves top, middle, bottom
+    Las etiquetas DEBEN ser especificas del release, no genericas tipo
+    "Proveedor / Plataforma / Apps".
+- skip_reason: null si vale la pena publicar, o un string corto si NO vale la pena
+    (ej. "cambio cosmetico", "rumor sin fuente", "release de nicho dev puro").
+    Solo si editorial_score < 40.
+
+Reglas duras:
+- No inventes datos, fechas, benchmarks, precios ni disponibilidad.
+- Si el input no lo dice, no lo digas.
+- Espanol natural, no traducido del ingles.
+- Elige la plantilla de diagrama que mas le conviene al release real,
+    no por defecto FLOW.
+
+Candidatos (JSON, uno por linea):
+{candidates_block}
+
+Responde SOLO con JSON valido en este shape exacto:
+{{
+  "ranked": [
+    {{
+      "id": int,
+      "editorial_score": int,
+      "headline_es": "string",
+      "hook": "string",
+      "image_title": "string",
+      "diagram": {{
+        "template": "FLOW",
+        "labels": {{ "node_1": "...", "node_2": "...", "node_3": "..." }}
+      }},
+      "skip_reason": null
+    }}
+  ]
+}}
+""".strip()
+
+
+def _normalize_editorial_item(item, original):
+    template = (item.get("diagram") or {}).get("template")
+    template = template.upper() if isinstance(template, str) else None
+    if template not in EDITORIAL_DIAGRAM_KEYS:
+        template = None
+
+    diagram_overrides = {}
+    if template:
+        labels = (item.get("diagram") or {}).get("labels") or {}
+        for key in EDITORIAL_DIAGRAM_KEYS[template]:
+            value = labels.get(key)
+            if isinstance(value, str) and value.strip():
+                diagram_overrides[key] = value.strip()
+        if len(diagram_overrides) != len(EDITORIAL_DIAGRAM_KEYS[template]):
+            diagram_overrides = {}
+            template = None
+
+    def _str(value):
+        return value.strip() if isinstance(value, str) and value.strip() else None
+
+    score = item.get("editorial_score")
+    if not isinstance(score, (int, float)):
+        score = None
+
+    return {
+        **original,
+        "headline_es": _str(item.get("headline_es")),
+        "hook": _str(item.get("hook")),
+        "image_title": _str(item.get("image_title")),
+        "diagram_overrides": diagram_overrides or None,
+        "editorial_template": template,
+        "editorial_score": score,
+        "skip_reason": _str(item.get("skip_reason")),
+    }
+
+
+def editorial_enrich(releases, max_candidates=8):
+    """
+    Pasa el pool de releases por una capa editorial con gpt-5-mini.
+    Reordena por editorial_score y agrega titulares, hook, image_title y
+    diagram_overrides especificos del release.
+    Si la llamada falla o devuelve algo invalido, devuelve los releases
+    originales sin tocar para que los fallbacks deterministas operen.
+    """
+    if not releases:
+        return releases
+
+    pool = releases[:max_candidates]
+    candidates = []
+    for idx, release in enumerate(pool):
+        candidates.append(
+            {
+                "id": idx,
+                "title": (release.get("title") or "").strip(),
+                "summary": clean_summary_text(release.get("summary", ""))[:500],
+                "link": release.get("link") or "",
+                "provider": canonical_provider_name(provider_name(release)),
+                "product": image_product_name(release),
+                "release_score": release.get("release_score"),
+                "published_ts": release.get("published_ts"),
+                "tier": release.get("tier"),
+            }
+        )
+
+    prompt = _editorial_prompt(candidates)
+
+    try:
+        response = client.responses.create(
+            model=EDITORIAL_MODEL,
+            input=prompt,
+            text={"format": {"type": "json_object"}},
+        )
+        raw = (response.output_text or "").strip()
+        if not raw:
+            raise ValueError("respuesta editorial vacia")
+        data = json.loads(raw)
+    except Exception as exc:
+        print(f"editorial_enrich fallo, uso fallbacks deterministas. Error: {exc}")
+        return releases
+
+    items = data.get("ranked") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        print("editorial_enrich devolvio shape invalido. Uso fallbacks.")
+        return releases
+
+    by_id = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        item_id = item.get("id")
+        if isinstance(item_id, int) and 0 <= item_id < len(pool):
+            by_id[item_id] = item
+
+    enriched = []
+    skipped = []
+    for idx, release in enumerate(pool):
+        item = by_id.get(idx)
+        if not item:
+            enriched.append(release)
+            continue
+
+        normalized = _normalize_editorial_item(item, release)
+        if normalized.get("skip_reason") and (normalized.get("editorial_score") or 0) < 40:
+            skipped.append((normalized.get("editorial_score"), normalized.get("skip_reason"), release.get("title")))
+            continue
+        enriched.append(normalized)
+
+    for score, reason, title in skipped:
+        print(f"editorial_enrich descarto release ({score}, {reason}): {title}")
+
+    enriched.sort(
+        key=lambda r: (
+            r.get("editorial_score") if r.get("editorial_score") is not None else -1,
+            r.get("release_score") or 0,
+            r.get("published_ts") or 0,
+        ),
+        reverse=True,
+    )
+
+    if not enriched:
+        # Si el editor descarto TODO, no forzamos contenido flojo:
+        # devolvemos lista vacia para que el caller muestre "no hay nada hoy".
+        return []
+
+    return enriched
+
+
+EDITORIAL_POOL_SIZE = 8
+
+
+def _selection_pool(articles):
+    # Pool diversificado mas grande (limit=8) para que el editor tenga de
+    # donde escoger. La capa editorial reordena y devuelve los mejores.
+    return get_top_releases(limit=EDITORIAL_POOL_SIZE, articles=articles)
+
+
 def get_top_release():
     """
     Seleccion unica del release del dia.
@@ -623,7 +925,9 @@ def get_top_release():
 
         print("No hay selected_release.json valido. Reconstruyendo Top 3 para content.")
         articles, new_seen = fetch_articles_for_selection()
-        top_releases = get_top_releases(limit=3, articles=articles)
+        pool = _selection_pool(articles)
+        enriched = editorial_enrich(pool)
+        top_releases = enriched[:3]
         save_selected_releases(top_releases)
 
         choice_index = int(SELECT_CHOICE) - 1 if SELECT_CHOICE else 0
@@ -633,15 +937,18 @@ def get_top_release():
         return selected, new_seen
 
     articles, new_seen = fetch_articles_for_selection()
-    top_releases = get_top_releases(limit=1, articles=articles)
-    best = top_releases[0] if top_releases else None
-    save_selected_releases(top_releases)
+    pool = _selection_pool(articles)
+    enriched = editorial_enrich(pool)
+    best = enriched[0] if enriched else None
+    save_selected_releases(enriched[:3])
     return best, new_seen
 
 
 def get_brief_releases():
     articles, new_seen = fetch_articles_for_selection()
-    top_releases = get_top_releases(limit=3, articles=articles)
+    pool = _selection_pool(articles)
+    enriched = editorial_enrich(pool)
+    top_releases = enriched[:3]
     save_selected_releases(top_releases)
     return top_releases, new_seen
 
@@ -755,6 +1062,13 @@ def title_is_descriptive(title):
 
 
 def build_human_title(article, max_len=100):
+    # Si la capa editorial LLM ya redacto el titular, lo respetamos.
+    headline = (article.get("headline_es") or "").strip()
+    if headline:
+        if len(headline) <= max_len:
+            return headline
+        return headline[: max_len - 3].rstrip() + "..."
+
     link = article.get("link") or ""
     title = (article.get("title") or "").replace("\n", " ").strip()
     summary = clean_summary_text(article.get("summary", ""))
@@ -862,7 +1176,8 @@ def build_brief_top3(top_releases):
         return (
             "AI RELEASE RADAR TOP 3 (Rodri)\n"
             f"FECHA: {today}\n\n"
-            "No hay lanzamientos relevantes nuevos hoy.\n"
+            "No hay lanzamientos que valga la pena publicar hoy.\n"
+            "El editor descarto todo el pool por falta de angulo claro.\n"
         )
 
     lines = [
@@ -872,34 +1187,56 @@ def build_brief_top3(top_releases):
     ]
 
     for i, article in enumerate(top_releases, start=1):
-        lines.extend(
-            [
-                f"{i}. {provider_product_label(article)}",
-                f"   TITULAR: {build_human_title(article)}",
-                f"   SCORE: {article.get('release_score')}",
-                f"   LINK: {article.get('link')}",
-                "",
-            ]
+        provider_label = provider_product_label(article)
+        title = build_human_title(article)
+        hook = (article.get("hook") or "").strip()
+        editorial_score = article.get("editorial_score")
+        release_score_value = article.get("release_score")
+
+        score_bits = []
+        if isinstance(editorial_score, (int, float)):
+            score_bits.append(f"editorial {int(editorial_score)}")
+        if isinstance(release_score_value, (int, float)):
+            score_bits.append(f"tecnico {int(release_score_value)}")
+        score_line = " | ".join(score_bits) if score_bits else ""
+
+        lines.append(f"{i}. {title}")
+        lines.append(f"   {provider_label}")
+        if hook:
+            lines.append(f"   POR QUE IMPORTA: {hook}")
+        if score_line:
+            lines.append(f"   SCORE: {score_line}")
+        lines.append(f"   LINK: {article.get('link')}")
+        lines.append("")
+
+    top = top_releases[0]
+    top_score = top.get("editorial_score")
+    if isinstance(top_score, (int, float)):
+        recommendation = (
+            f"Publica primero el #1: el editor le dio {int(top_score)}/100 "
+            "por novedad, magnitud y angulo claro para audiencia no tecnica."
+        )
+    else:
+        recommendation = (
+            "Publica primero el #1: tiene la mejor mezcla de fuente, "
+            "novedad e impacto practico segun el scoring."
         )
 
-    recommendation_index = 1
-    recommendation = (
-        f"Publica primero el #{recommendation_index} porque tiene el score mas alto "
-        "y es el release con mejor mezcla de fuente oficial, novedad e impacto practico."
-    )
-
-    lines.extend(["", "RECOMENDACION:", recommendation])
+    lines.extend(["RECOMENDACION:", recommendation])
     return "\n".join(lines)
 
 
 def build_prompt(today: str, best, mode: str):
-    # best es 1 solo release detectado por scoring deterministico
+    # best es 1 solo release detectado por scoring deterministico,
+    # opcionalmente enriquecido por la capa editorial (headline_es, hook).
     title = (best.get("title") or "").replace("\n", " ").strip()
     summary = (best.get("summary") or "").replace("\n", " ").strip()
     link = best.get("link") or ""
     source_kind = best.get("source_kind")
     tier = best.get("tier")
     score = best.get("release_score")
+    headline_es = (best.get("headline_es") or "").strip()
+    hook = (best.get("hook") or "").strip()
 
     context = (
         f"ESTADO: {tier}\n"
@@ -911,6 +1248,11 @@ def build_prompt(today: str, best, mode: str):
         f"RESUMEN: {summary}\n"
         f"LINK: {link}\n"
     )
+
+    if headline_es:
+        context += f"TITULAR_EDITORIAL: {headline_es}\n"
+    if hook:
+        context += f"ANGULO_EDITORIAL: {hook}\n"
 
     base_rules = f"""
 Actua como un creador de contenido que explica lanzamientos reales de IA de forma simple y lista para grabar.
@@ -1080,25 +1422,25 @@ def _trim_bad_title_ending(title):
 
 
 def build_short_image_title(release):
-    raw_text = f"{release.get('title', '')} {release.get('summary', '')} {release.get('link', '')}".lower()
-
-    if "claude code" in raw_text:
-        return "Claude Code elimina fricción en trabajo remoto"
-    if "gemini" in raw_text and ("deprecated" in raw_text or "deprecation" in raw_text):
-        return "Gemini obliga a actualizar integraciones de video"
-    if "openai" in raw_text and "aws" in raw_text:
-        return "OpenAI abre acceso en AWS para equipos"
+    # Fallback deterministico: el titular humano del release, limpio para la imagen.
+    # La capa editorial LLM puede sobreescribir esto via release["image_title"].
+    override = (release.get("image_title") or "").strip()
+    if override:
+        return safe_image_text(override, max_chars=72, fallback=override)
 
     product = image_product_name(release)
     provider = canonical_provider_name(provider_name(release))
-    title = compact_image_title(release, max_chars=52)
-    if title and not title.lower().startswith((product.lower(), provider.lower())):
-        title = f"{product} acelera {title.lower()}"
+    title = compact_image_title(release, max_chars=64)
     title = _trim_bad_title_ending(title)
-    return safe_image_text(title, max_chars=60, fallback=f"{product} mejora trabajo con IA")
+    fallback = f"{provider} estrena cambios en {product}" if product != provider else f"{provider} estrena cambios"
+    return safe_image_text(title, max_chars=72, fallback=fallback)
 
 
 def image_template(release):
+    editorial = release.get("editorial_template")
+    if editorial in {"FLOW", "BEFORE_AFTER", "ARCHITECTURE"}:
+        return editorial
+
     text = f"{release.get('title', '')} {release.get('summary', '')} {release.get('link', '')}".lower()
 
     if _matches_any(
@@ -1242,23 +1584,34 @@ def draw_circular_avatar(image, path, x, y, size):
         return False
 
 
+def _platform_label_for(provider, product):
+    # Etiqueta del nodo intermedio. Evita repetir el provider en el nodo central.
+    if not product or product == provider:
+        if provider == "OpenAI":
+            return "Modelo"
+        if provider == "Anthropic":
+            return "Claude"
+        if provider == "Google":
+            return "Gemini"
+        return "Plataforma"
+    return product
+
+
 def build_diagram_texts(release, template):
+    # Si la capa editorial LLM ya decidio etiquetas, las usamos tal cual.
+    overrides = release.get("diagram_overrides") or {}
+    if overrides:
+        return {key: safe_image_text(value, max_chars=28, fallback=value) for key, value in overrides.items()}
+
     raw_text = f"{release.get('title', '')} {release.get('summary', '')} {release.get('link', '')}".lower()
     provider = canonical_provider_name(provider_name(release))
     product = image_product_name(release)
+    platform = _platform_label_for(provider, product)
 
     if template == "FLOW":
         if "aws" in raw_text and provider == "OpenAI":
-            return {
-                "node_1": "OpenAI",
-                "node_2": "AWS",
-                "node_3": "Apps",
-            }
-        return {
-            "node_1": provider,
-            "node_2": product if product not in {"API", provider} else "Modelo",
-            "node_3": "Apps",
-        }
+            return {"node_1": "OpenAI", "node_2": "AWS", "node_3": "Apps"}
+        return {"node_1": provider, "node_2": platform, "node_3": "Apps"}
 
     if template == "BEFORE_AFTER":
         before = "Proceso manual"
@@ -1290,9 +1643,6 @@ def build_diagram_texts(release, template):
     if "aws" in raw_text and provider == "OpenAI":
         nodes = ["OpenAI", "AWS", "Apps / Empresas"]
     else:
-        platform = product
-        if product == "API":
-            platform = "API"
         nodes = [provider, platform, "Apps / Empresas"]
 
     return {
@@ -1303,42 +1653,32 @@ def build_diagram_texts(release, template):
 
 
 def build_image_prompt(release, content_text):
-    # OpenAI Images genera exclusivamente fondo abstracto sin texto ni logos.
-    template = image_template(release)
-
-    return f"""
-Create a 1080x1080 square background image only.
-This image will be used behind text added later with Python/Pillow.
+    # OpenAI Images genera exclusivamente fondo abstracto sin texto, formas UI ni cajas.
+    return """
+Create a 1080x1080 square abstract background image.
+This image will sit behind text and diagrams added later with Pillow,
+so it must remain a clean atmospheric background, not a composition.
 
 Visual direction:
-- Dark premium tech background.
-- Black or very dark gray base.
-- Subtle grid.
-- Abstract system architecture inspired by the {template} template.
-- Soft glowing connector lines.
-- Clean depth.
-- Minimal UI feeling.
-- Premium CTO/CIO-level educational visual style.
-- Leave visual breathing room in the top 20% and bottom 20%.
+- Deep navy to near-black base, slight cyan-blue highlight in one corner.
+- Soft cinematic gradient with a single subtle light source.
+- Faint particles or fine bokeh, very low contrast.
+- Optional: extremely subtle diagonal noise or film grain.
+- Premium editorial tech mood. Think Apple keynote backdrop, not infographic.
+- Visually empty in the center 60% so foreground text reads cleanly.
 
 Strict prohibitions:
-- No text.
-- No letters.
-- No words.
-- No numbers.
-- No logos.
-- No icons.
-- No brand marks.
-- No UI labels.
-- No screenshots.
-- No robots.
-- No brains.
-- No generic AI glowing art.
-- No stock images.
-- No fantasy visuals.
-- No clutter.
+- No text, letters, words or numbers.
+- No logos, icons, brand marks or UI labels.
+- No rectangles, cards, panels, frames or boxes of any kind.
+- No diagrams, arrows, flow lines, nodes or connector lines.
+- No grids, blueprints, wireframes or schematics.
+- No screenshots, dashboards, charts or HUD elements.
+- No robots, brains, humanoids or characters.
+- No generic glowing AI orbs, neural nets or fantasy sci-fi art.
+- No stock photo aesthetic.
 
-The result must be a clean abstract background/diagram base with absolutely no readable text.
+The output must be an empty atmospheric backdrop, never a layout.
 """.strip()
 
 
@@ -1405,7 +1745,11 @@ def wrap_text(text, font, max_width, max_lines, add_ellipsis=True):
         if add_ellipsis:
             lines[-1] = (lines[-1] + "...").strip()
 
-    lines = [_trim_bad_title_ending(line) for line in lines]
+    # Solo recortamos preposiciones colgantes en la ultima linea.
+    # En lineas intermedias, "para" / "de" / "con" deben quedarse para no
+    # romper la gramatica, p.ej. "Disponible para\nequipos".
+    if lines:
+        lines[-1] = _trim_bad_title_ending(lines[-1])
     lines = [line for line in lines if line]
     return lines or ["Cambio importante"]
 

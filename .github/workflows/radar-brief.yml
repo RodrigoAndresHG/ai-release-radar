@@ -34,6 +34,17 @@ jobs:
           path: selected_release.json
           key: selected-release-${{ steps.radar-date.outputs.date }}
 
+      - name: Restore release history cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            history_brief.json
+            history_content.json
+          key: release-history-${{ steps.radar-date.outputs.date }}-${{ github.run_id }}
+          restore-keys: |
+            release-history-${{ steps.radar-date.outputs.date }}-
+            release-history-
+
       - name: Install dependencies
         run: pip install -r requirements.txt
 

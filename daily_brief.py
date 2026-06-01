@@ -1429,12 +1429,47 @@ def _trim_bad_title_ending(title):
     return " ".join(words).strip(" -:|.,")
 
 
+# Palabras que abren una "cola" subordinada del titular. Si el titular sigue
+# despues de una de estas, cortamos ahi para la portada: el resto va al caption.
+_IMAGE_TITLE_TAIL_WORDS = {
+    "de", "del", "para", "con", "por", "que", "y", "e", "o", "u", "en", "a",
+    "al", "sobre", "como", "su", "sus", "un", "una", "unos", "unas", "el",
+    "la", "los", "las", "tras", "hacia", "desde", "segun", "mientras", "donde",
+}
+_IMAGE_TITLE_MIN_WORDS = 3   # no cortar antes de tener una frase autoconclusiva
+_IMAGE_TITLE_MAX_WORDS = 7   # tope duro para que la portada no se sature
+
+
+def shorten_headline_for_image(headline):
+    # Recorta el titular en un limite de frase limpio para la portada.
+    # Ej: "OpenAI pone la primera piedra de un gran centro de datos"
+    #  -> "OpenAI pone la primera piedra" (corta antes de "de").
+    # La historia completa sigue en headline_es (brief + caption del contenido).
+    words = (headline or "").split()
+    if not words:
+        return headline
+
+    kept = []
+    for word in words:
+        token = word.lower().strip(".,;:()")
+        if len(kept) >= _IMAGE_TITLE_MIN_WORDS and token in _IMAGE_TITLE_TAIL_WORDS:
+            break
+        kept.append(word)
+        if len(kept) >= _IMAGE_TITLE_MAX_WORDS:
+            break
+
+    short = _trim_bad_title_ending(" ".join(kept))
+    return short or headline
+
+
 def build_short_image_title(release):
-    # El titular de la portada usa el mismo headline_es del brief (via human_title).
-    # Una sola fuente de verdad evita que el LLM mezcle campos.
+    # El titular de la portada usa el mismo headline_es del brief (via human_title),
+    # pero recortado a una frase corta y autoconclusiva. Una sola fuente de verdad
+    # evita que el LLM mezcle campos; el caption lleva la version completa.
     product = image_product_name(release)
     provider = canonical_provider_name(provider_name(release))
-    title = compact_image_title(release, max_chars=72)
+    title = compact_image_title(release, max_chars=120)
+    title = shorten_headline_for_image(title)
     title = _trim_bad_title_ending(title)
     fallback = f"{provider} estrena cambios en {product}" if product != provider else f"{provider} estrena cambios"
     return safe_image_text(title, max_chars=80, fallback=fallback)
@@ -1635,11 +1670,10 @@ def fit_wrapped_title(text, max_width, max_lines=2, start_size=60, min_size=42, 
 
 
 def build_short_text_title(text):
-    title = safe_image_text(text, max_chars=60, fallback="Cambio importante")
-    title = _trim_bad_title_ending(title)
-    if len(title) <= 48:
-        return title
-    title = safe_image_text(title, max_chars=48, fallback="Cambio importante")
+    # El titular ya viene recortado por shorten_headline_for_image. Aqui solo
+    # limpiamos caracteres raros y colas colgantes; NO recortamos a media frase
+    # (el corte por 48 caracteres dejaba titulos como "...de un gran").
+    title = safe_image_text(text, max_chars=90, fallback="Cambio importante")
     return _trim_bad_title_ending(title)
 
 

@@ -140,6 +140,8 @@ MIN_RELEASE_SCORE = 30
 # El editor solo publica releases con editorial_score >= este piso.
 # "Menos pero mejores": en dias flojos puede entregar 1-2, o nada.
 EDITORIAL_MIN_PUBLISH = 60
+# Cuantos candidatos ve el editor LLM (y tamano del pool diversificado).
+EDITORIAL_POOL_SIZE = 12
 
 APP_NAME = "NotiAgente Hered-IA"
 PERSONAL_BRAND = "Rodrigo Hered IA"
@@ -943,7 +945,7 @@ def _normalize_editorial_item(item, original):
     }
 
 
-def editorial_enrich(releases, max_candidates=8):
+def editorial_enrich(releases, max_candidates=EDITORIAL_POOL_SIZE):
     """
     Pasa el pool de releases por una capa editorial con gpt-5-mini.
     Reordena por editorial_score y agrega headline_es, hook e image_concept
@@ -1029,9 +1031,6 @@ def editorial_enrich(releases, max_candidates=8):
     )
 
     return enriched
-
-
-EDITORIAL_POOL_SIZE = 12
 
 
 def apply_quality_floor(enriched, limit=3, floor=EDITORIAL_MIN_PUBLISH):

@@ -42,16 +42,17 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 # Configuración
 # -----------------------------
 OFFICIAL_SOURCES = [
-    # OpenAI News. TODO: OpenAI API changelog no expone RSS oficial estable.
+    # OpenAI News (lanzamientos y producto, mainstream).
     "https://openai.com/news/rss.xml",
-    # Claude Code changelog. TODO: Claude app release notes y Anthropic API release notes no exponen RSS oficial estable.
-    "https://code.claude.com/docs/en/changelog/rss.xml",
-    # Vertex AI Generative AI release notes.
-    "https://docs.cloud.google.com/feeds/generative-ai-on-vertex-ai-release-notes.xml",
-    # Google Gemini product updates. TODO: Gemini API changelog no expone RSS oficial estable.
+    # Google Gemini product updates (producto, mainstream).
     "https://blog.google/products-and-platforms/products/gemini/rss/",
-    # Google DeepMind blog.
+    # Google DeepMind blog (investigacion y modelos).
     "https://deepmind.google/blog/rss.xml",
+    # NOTA: se quitaron el changelog de Claude Code y las release notes de
+    # Vertex AI a proposito. Solo generaban ruido de nicho dev (versiones
+    # "2.1.16x", release notes de plataforma) que no sirve para contenido.
+    # Los lanzamientos grandes de Anthropic/Claude entran igual por las
+    # fuentes editoriales (TechCrunch, The Decoder, Ars) y Google News.
 ]
 
 OFFICIAL_DOMAINS = {
@@ -97,7 +98,8 @@ KEYWORDS = [
 ]
 
 # Fuentes editoriales: cubren lanzamientos virales y cobertura curada
-# que no aparece en RSS oficiales.
+# que no aparece en RSS oficiales. Son la principal fuente de noticias
+# "emocionantes" para audiencia no tecnica.
 EDITORIAL_RSS_SOURCES = [
     # TechCrunch tag IA: cobertura editorial diaria.
     "https://techcrunch.com/category/artificial-intelligence/feed/",
@@ -105,6 +107,10 @@ EDITORIAL_RSS_SOURCES = [
     "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml",
     # MIT Technology Review IA.
     "https://www.technologyreview.com/topic/artificial-intelligence/feed",
+    # The Decoder: noticias de IA, formato directo y mainstream.
+    "https://the-decoder.com/feed/",
+    # Ars Technica IA: cobertura seria y de impacto.
+    "https://arstechnica.com/ai/feed/",
 ]
 
 # Hacker News (Algolia): captura lanzamientos comentados el mismo dia.
@@ -117,7 +123,7 @@ HN_KEYWORDS = [
     "GPT",
     "Sora",
 ]
-HN_MIN_POINTS = 80  # filtro minimo de relevancia comunitaria
+HN_MIN_POINTS = 150  # solo historias grandes; evita ruido de nicho dev
 
 HISTORY_FILE = f"history_{RADAR_MODE}.json"
 SELECTED_RELEASE_FILE = "selected_release.json"
@@ -128,7 +134,12 @@ INSTAGRAM_IMAGE_PATH = os.path.join("output", "instagram_release.png")
 BACKGROUND_IMAGE_PATH = os.path.join("output", "background.png")
 BRAND_AVATAR_PATH = os.path.join("assets", "brand", "rodrigo.png")
 RECENT_HOURS = 72  # solo tendencias recientes (3 dias)
-MIN_RELEASE_SCORE = 45
+# Umbral crudo bajo a proposito: solo descarta lo claramente irrelevante.
+# El filtro de calidad REAL lo hace el editor LLM (editorial_score) + el piso.
+MIN_RELEASE_SCORE = 30
+# El editor solo publica releases con editorial_score >= este piso.
+# "Menos pero mejores": en dias flojos puede entregar 1-2, o nada.
+EDITORIAL_MIN_PUBLISH = 60
 
 APP_NAME = "NotiAgente Hered-IA"
 PERSONAL_BRAND = "Rodrigo Hered IA"
@@ -297,8 +308,16 @@ def recent_published_summaries(days=PUBLISHED_LOG_LOOKBACK_DAYS):
 # -----------------------------
 # Utilidades de feeds
 # -----------------------------
+# Algunos feeds bloquean el user-agent por defecto de feedparser (403/vacio).
+# Fingimos un navegador real para que el fetch sea confiable desde GitHub.
+FEED_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+)
+
+
 def parse_feed(url, limit=10):
-    feed = feedparser.parse(url)
+    feed = feedparser.parse(url, agent=FEED_USER_AGENT)
     items = []
 
     for entry in feed.entries[:limit]:
@@ -372,6 +391,12 @@ def fetch_hacker_news(keywords, min_points=HN_MIN_POINTS, hours=RECENT_HOURS):
 
             title = (hit.get("title") or "").strip()
             if not title:
+                continue
+
+            # "Show HN" / "Ask HN" son proyectos indie y discusiones de
+            # programadores: casi nunca sirven para contenido mainstream.
+            lowered = title.lower()
+            if lowered.startswith("show hn") or lowered.startswith("ask hn"):
                 continue
 
             domain = urlparse(url).netloc
@@ -819,24 +844,43 @@ def _editorial_prompt(candidates):
         memory_block = "Sin historial reciente de publicaciones."
 
     return f"""
-Actuas como editor jefe de un canal de IA en espanol para LATAM.
-Audiencia: rectores, gerentes, emprendedores, builders y creators NO tecnicos.
-Tu trabajo es decidir cual lanzamiento merece publicacion hoy y como contarlo.
+Actuas como editor jefe de un canal viral de IA en espanol para LATAM.
+Audiencia: emprendedores, gerentes, creators y curiosos NO tecnicos.
+Tu UNICA pregunta al evaluar cada noticia es:
+"¿Esto frena el scroll y da para un video o post que la gente comente?"
 
 Recibes una lista de candidatos detectados por un radar de releases.
 Para CADA candidato, devuelves un objeto con:
 
 - id: el mismo id que recibiste.
-- editorial_score: 0-100. Criterio:
-    80-100 = lanzamiento real, novedad clara, accionable o con impacto inmediato para no tecnicos.
-    50-79  = cambio relevante pero incremental.
-    0-49   = cosmetico, niche, sin angulo claro.
-- headline_es: titular humano en espanol natural, 8-14 palabras.
+- editorial_score: 0-100. Mide CONTENT-WORTHINESS (que tan publicable es), no
+    que tan "tecnicamente importante" sea. Criterio:
+    85-100 = noticia fuerte: lanzamiento de modelo grande, demo viral, jugada
+             de una gran empresa (OpenAI, Google, Anthropic, Meta, xAI),
+             polemica, o un cambio que la gente comentaria. Gancho obvio.
+    60-84  = producto o app de IA que un no-tecnico podria usar y le interesa.
+    30-59  = relevante pero incremental o sin angulo claro para no-tecnicos.
+    0-29   = NO publicable para esta audiencia.
+
+CASTIGA con score < 30 (no son contenido para no-tecnicos):
+- herramientas, librerias, SDKs o frameworks para programadores;
+- changelogs, "release notes", numeros de version (ej. "2.1.16x");
+- proyectos open-source de nicho, CLIs, "Show HN", repos de GitHub;
+- infraestructura cloud/dev (Vertex, Kubernetes, bases de datos, etc.);
+- cosas tecnicas sin un "y esto a mi que" claro.
+La unica excepcion: que tenga impacto mainstream evidente (lo usaria o
+comentaria alguien normal).
+
+Se ESTRICTO. Es mejor pocas noticias fuertes que un Top 3 relleno de cosas
+flojas. No infles el score para llenar cupos.
+
+Ademas, para CADA candidato:
+- headline_es: titular en espanol, 8-14 palabras, con trato de TU (cercano).
+    Que genere curiosidad o emocion (beneficio, sorpresa, "esto cambia X").
     No Spanglish. No traduccion literal. No numeros de version.
-    No frases tipo "actualiza con cambios importantes".
-    Suena como algo que un creador diria en voz alta.
-- hook: una linea (max 18 palabras) que explique por que importa para alguien NO tecnico.
-    No repetir el titular. Sin jerga. Concreto.
+    Nada de "actualiza con cambios importantes". Suena a creador, no a changelog.
+- hook: una linea (max 18 palabras), trato de TU, que prometa el porque importa.
+    Concreto, sin jerga, distinto del titular. Engancha.
 - image_concept: descripcion visual EN INGLES (25-55 palabras) de UNA sola
     imagen cinematografica conceptual del release. Estilo portada de revista
     editorial (TIME, Wired, The Atlantic). Especifica:
@@ -851,14 +895,13 @@ Para CADA candidato, devuelves un objeto con:
     sky and amber rim light, photorealistic cinematic atmosphere".
     NOTA: el titular de la portada se toma de headline_es. NO repitas la
     descripcion visual como si fuera un titular.
-- skip_reason: null si vale la pena publicar, o un string corto si NO vale la pena
-    (ej. "cambio cosmetico", "rumor sin fuente", "release de nicho dev puro").
-    Solo si editorial_score < 40.
+- skip_reason: null si vale la pena, o un string corto explicando por que NO
+    (ej. "herramienta para devs", "changelog sin angulo", "nicho tecnico").
 
 Reglas duras:
 - No inventes datos, fechas, benchmarks, precios ni disponibilidad.
 - Si el input no lo dice, no lo digas.
-- Espanol natural, no traducido del ingles.
+- Espanol natural con trato de tu, no traducido del ingles.
 
 Memoria editorial:
 {memory_block}
@@ -988,7 +1031,26 @@ def editorial_enrich(releases, max_candidates=8):
     return enriched
 
 
-EDITORIAL_POOL_SIZE = 8
+EDITORIAL_POOL_SIZE = 12
+
+
+def apply_quality_floor(enriched, limit=3, floor=EDITORIAL_MIN_PUBLISH):
+    """
+    Aplica el piso de calidad: solo devuelve releases con editorial_score
+    suficiente. "Menos pero mejores": puede devolver 1, 2 o 0.
+    Si el editor LLM fallo (nadie tiene editorial_score), no castigamos:
+    devolvemos el top normal como fallback para no quedarnos sin nada.
+    """
+    scored = [r for r in enriched if isinstance(r.get("editorial_score"), (int, float))]
+    if not scored:
+        # El LLM no corrio o fallo: usamos el orden que venga, sin piso.
+        return enriched[:limit]
+
+    qualified = [r for r in scored if r.get("editorial_score", 0) >= floor]
+    dropped = len(scored) - len(qualified)
+    if dropped:
+        print(f"apply_quality_floor: {dropped} release(s) por debajo de {floor}, descartados.")
+    return qualified[:limit]
 
 
 def _selection_pool(articles):
@@ -1037,7 +1099,7 @@ def get_top_release():
         articles, new_seen = fetch_articles_for_selection()
         pool = _selection_pool(articles)
         enriched = editorial_enrich(pool)
-        top_releases = enriched[:3]
+        top_releases = apply_quality_floor(enriched, limit=3)
         save_selected_releases(top_releases)
         append_to_published_log(top_releases)
 
@@ -1050,8 +1112,8 @@ def get_top_release():
     articles, new_seen = fetch_articles_for_selection()
     pool = _selection_pool(articles)
     enriched = editorial_enrich(pool)
-    best = enriched[0] if enriched else None
-    top_releases = enriched[:3]
+    top_releases = apply_quality_floor(enriched, limit=3)
+    best = top_releases[0] if top_releases else None
     save_selected_releases(top_releases)
     append_to_published_log(top_releases)
     return best, new_seen
@@ -1062,8 +1124,8 @@ def get_brief_releases():
     pool = _selection_pool(articles)
     print(f"brief: articulos crudos={len(articles)}, pool editorial={len(pool)}")
     enriched = editorial_enrich(pool)
-    top_releases = enriched[:3]
-    print(f"brief: enriched={len(enriched)}, top3={len(top_releases)}")
+    top_releases = apply_quality_floor(enriched, limit=3)
+    print(f"brief: enriched={len(enriched)}, top3={len(top_releases)} (piso {EDITORIAL_MIN_PUBLISH})")
     save_selected_releases(top_releases)
     append_to_published_log(top_releases)
     return top_releases, new_seen
@@ -1263,6 +1325,7 @@ Objetivo:
 Convertir UN lanzamiento real o cambio concreto en una pieza clara, util y con criterio.
 
 Reglas:
+- Trato de TU (cercano, directo), nunca "usted" ni "vosotros".
 - Maximo 300 palabras total.
 - Lenguaje simple.
 - Cero jerga innecesaria.
